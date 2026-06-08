@@ -203,9 +203,9 @@ def main():
     processed_ids = set()
     for event in longpoll.listen():
         if event.type == VkEventType.MESSAGE_NEW and event.to_me and not event.from_me:
-    if event.message_id in processed_ids:
-        continue
-    processed_ids.add(event.message_id)
+            if event.message_id in processed_ids:
+                continue
+            processed_ids.add(event.message_id)
             user_id = event.user_id
             text = event.text.strip()
             state = get_state(user_id)
