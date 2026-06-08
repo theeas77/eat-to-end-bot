@@ -180,9 +180,17 @@ def kb_items(category):
 
 def kb_sauces():
     kb = VkKeyboard(one_time=True)
-    for sauce in SAUCES:
-        kb.add_button(sauce, color=VkKeyboardColor.SECONDARY)
-        kb.add_line()
+    kb.add_button("Фирменный", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("BBQ", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Острый", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Сырный", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Медово-горчичный", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("Без соуса", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
 def kb_extras():
