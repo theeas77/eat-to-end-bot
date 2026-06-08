@@ -1,28 +1,19 @@
-"""
-VK-бот для предзаказов Eat to End
-Требования: pip install vkbottle
-"""
-
-import asyncio
-import json
+import vk_api
+from vk_api.longpoll import VkLongPoll, VkEventType
+from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 import datetime
-from vkbottle.bot import Bot, Message
-from vkbottle import Keyboard, KeyboardButtonColor, Text, Callback
 
-# ==================== НАСТРОЙКИ ====================
 VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0xrx1B1TXjcaWMu1EAWDDrqfH9us2nT7381dpYQUaiiXbaZAwqZbpEVGQ9oxyw3Bqsu_mbdyWdFVKlhcbNZE3lybJXXGoadma1fWTdzjtADUvTTZR2bbIySqQn8_qlyj5bYTzaC1DzmOHoWGJkRH_szQsA"
-ADMIN_VK_ID = 0  # ВАШ VK ID для уведомлений (число)
+ADMIN_VK_ID = 1118370233
 
-# Менеджеры точек: VK ID менеджера для каждой точки
 MANAGERS = {
-    "Ленина 36/2": 1118370233,       # замените на VK ID менеджера
+    "Ленина 36/2": 1118370233,
     "Промышленная 13": 1118370233,
     "Советская 2/10": 1118370233,
 }
 
-# ==================== МЕНЮ ====================
 MENU = {
-    "🌯 Шаурма": {
+    "Шаурма": {
         "Шаурма с курицей мини": 235,
         "Шаурма с курицей стандарт": 280,
         "Шаурма с курицей большая": 350,
@@ -33,11 +24,11 @@ MENU = {
         "Сэндвич с курицей": 250,
         "Сэндвич с беконом": 250,
     },
-    "🔥 Шашлык": {
+    "Шашлык": {
         "Шашлык из курицы": 360,
         "Шашлык из свинины": 395,
     },
-    "🥤 Напитки": {
+    "Напитки": {
         "Лимонад Цитрусовый": 160,
         "Эспрессо": 100,
         "Двойной эспрессо": 120,
@@ -61,396 +52,349 @@ MENU = {
     },
 }
 
-SAUCES = ["Фирменный", "BBQ", "Острый", "Сырный", "Медово-горчичный"]
+SAUCES = ["Фирменный", "BBQ", "Острый", "Сырный", "Медово-горчичный", "Без соуса"]
 
 EXTRAS = {
-    "Сыр тертый": 42, "Огурцы соленые": 42, "Морковка по-корейски": 42,
-    "Красный лук": 42, "Лук фри": 42, "Халапеньо": 42, "Бекон": 42,
-    "Ананасы": 42, "Оливки": 42, "Перец болгарский": 42, "Соус доп.": 42,
-    "Курица доп.": 77, "Свинина доп.": 77,
+    "Сыр тертый": 42,
+    "Огурцы соленые": 42,
+    "Морковка по-корейски": 42,
+    "Красный лук": 42,
+    "Лук фри": 42,
+    "Халапеньо": 42,
+    "Бекон": 42,
+    "Ананасы": 42,
+    "Оливки": 42,
+    "Перец болгарский": 42,
+    "Курица доп.": 77,
+    "Свинина доп.": 77,
 }
 
-# Временные слоты (каждые 15 минут, 10:00–22:00)
+order_counter = 0
+user_states = {}
+
+def get_state(user_id):
+    if user_id not in user_states:
+        user_states[user_id] = {
+            "step": "main",
+            "order": {"items": {}, "extras": [], "sauce": None, "point": None, "pickup_time": None}
+        }
+    return user_states[user_id]
+
+def reset_state(user_id):
+    user_states[user_id] = {
+        "step": "main",
+        "order": {"items": {}, "extras": [], "sauce": None, "point": None, "pickup_time": None}
+    }
+
 def get_time_slots():
     slots = []
-    start = datetime.time(10, 0)
-    end = datetime.time(22, 0)
-    current = datetime.datetime.combine(datetime.date.today(), start)
-    end_dt = datetime.datetime.combine(datetime.date.today(), end)
-    now = datetime.datetime.now() + datetime.timedelta(minutes=20)  # минимум 20 мин на приготовление
+    current = datetime.datetime.combine(datetime.date.today(), datetime.time(10, 0))
+    end_dt = datetime.datetime.combine(datetime.date.today(), datetime.time(22, 0))
+    now = datetime.datetime.now() + datetime.timedelta(minutes=20)
     while current <= end_dt:
         if current > now:
             slots.append(current.strftime("%H:%M"))
         current += datetime.timedelta(minutes=15)
-    return slots[:16]  # максимум 16 слотов в клавиатуре
+    return slots[:16]
 
-# ==================== GOOGLE SHEETS ====================
-def get_sheet():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(GOOGLE_CREDENTIALS_FILE, scope)
-    client = gspread.authorize(creds)
-    try:
-        sheet = client.open(GOOGLE_SHEET_NAME).sheet1
-    except gspread.SpreadsheetNotFound:
-        spreadsheet = client.create(GOOGLE_SHEET_NAME)
-        sheet = spreadsheet.sheet1
-        sheet.append_row(["№", "Дата", "Время заказа", "Время готовности", "Точка", "VK ID", "Имя", "Заказ", "Соус", "Добавки", "Сумма", "Статус"])
-    return sheet
-
-def save_order_to_sheet(order: dict) -> int:
-    sheet = get_sheet()
-    all_rows = sheet.get_all_values()
-    order_num = len(all_rows)  # номер заказа = кол-во строк включая заголовок
-
-    items_str = "; ".join([f"{k} x{v}" for k, v in order["items"].items()])
-    extras_str = ", ".join(order.get("extras", [])) or "—"
-    sauce_str = order.get("sauce", "—")
-
-    sheet.append_row([
-        order_num,
-        datetime.datetime.now().strftime("%d.%m.%Y"),
-        datetime.datetime.now().strftime("%H:%M"),
-        order.get("pickup_time", "—"),
-        order.get("point", "—"),
-        order.get("user_id", "—"),
-        order.get("user_name", "—"),
-        items_str,
-        sauce_str,
-        extras_str,
-        order.get("total", 0),
-        "Новый",
-    ])
-    return order_num
-
-# ==================== СОСТОЯНИЯ ПОЛЬЗОВАТЕЛЕЙ ====================
-# Хранится в памяти. При перезапуске бота сбрасывается — для продакшна используйте Redis
-user_states = {}  # user_id -> {"step": ..., "order": {...}}
-
-def get_state(user_id: int) -> dict:
-    if user_id not in user_states:
-        user_states[user_id] = {"step": "start", "order": {"items": {}, "extras": [], "sauce": None}}
-    return user_states[user_id]
-
-def reset_state(user_id: int):
-    user_states[user_id] = {"step": "start", "order": {"items": {}, "extras": [], "sauce": None}}
-
-# ==================== КЛАВИАТУРЫ ====================
-def kb_main():
-    kb = Keyboard(one_time=False)
-    kb.add(Text("🛒 Сделать предзаказ", {"cmd": "order"}), color=KeyboardButtonColor.POSITIVE)
-    kb.row()
-    kb.add(Text("📋 Мои заказы", {"cmd": "my_orders"}))
-    kb.add(Text("ℹ️ О боте", {"cmd": "about"}))
-    return kb
-
-def kb_points():
-    kb = Keyboard(one_time=True)
-    for point in MANAGERS.keys():
-        kb.add(Text(f"📍 {point}"))
-        kb.row()
-    kb.add(Text("❌ Отмена"))
-    return kb
-
-def kb_categories():
-    kb = Keyboard(one_time=True)
-    for cat in MENU.keys():
-        kb.add(Text(cat))
-        kb.row()
-    kb.add(Text("✅ Корзина и далее"))
-    kb.row()
-    kb.add(Text("❌ Отмена"))
-    return kb
-
-def kb_items(category: str):
-    kb = Keyboard(one_time=True)
-    items = MENU[category]
-    for name, price in items.items():
-        kb.add(Text(f"{name} — {price}₽"))
-        kb.row()
-    kb.add(Text("◀️ Назад к категориям"))
-    return kb
-
-def kb_sauces():
-    kb = Keyboard(one_time=True)
-    for sauce in SAUCES:
-        kb.add(Text(sauce))
-        kb.row()
-    kb.add(Text("Без соуса"))
-    return kb
-
-def kb_extras():
-    kb = Keyboard(one_time=True)
-    for extra, price in list(EXTRAS.items())[:6]:  # первые 6 для примера
-        kb.add(Text(f"+ {extra} (+{price}₽)"))
-        kb.row()
-    kb.add(Text("✅ Без добавок / готово"))
-    return kb
-
-def kb_time_slots():
-    slots = get_time_slots()
-    kb = Keyboard(one_time=True)
-    for i, slot in enumerate(slots):
-        kb.add(Text(f"⏰ {slot}"))
-        if (i + 1) % 3 == 0:
-            kb.row()
-    kb.row()
-    kb.add(Text("❌ Отмена"))
-    return kb
-
-def kb_confirm():
-    kb = Keyboard(one_time=True)
-    kb.add(Text("✅ Подтвердить заказ"), color=KeyboardButtonColor.POSITIVE)
-    kb.row()
-    kb.add(Text("🗑 Очистить и начать заново"), color=KeyboardButtonColor.NEGATIVE)
-    return kb
-
-# ==================== БОТ ====================
-bot = Bot(token=VK_TOKEN)
-
-def format_cart(order: dict) -> str:
+def format_cart(order):
     if not order["items"]:
         return "Корзина пуста"
     lines = []
     total = 0
-    for item, qty in order["items"].items():
-        # Найти цену
+    for item_name, qty in order["items"].items():
         price = 0
         for cat in MENU.values():
-            for name, p in cat.items():
-                if name in item or item in name:
-                    price = p
-                    break
-        lines.append(f"• {item} x{qty} = {price * qty}₽")
+            if item_name in cat:
+                price = cat[item_name]
+                break
+        lines.append(f"{item_name} x{qty} = {price * qty}р.")
         total += price * qty
     for extra in order.get("extras", []):
-        extra_price = EXTRAS.get(extra.replace("+ ", "").split(" (+")[0], 42)
-        lines.append(f"• {extra} = {extra_price}₽")
-        total += extra_price
+        price = EXTRAS.get(extra, 42)
+        lines.append(f"{extra} = {price}р.")
+        total += price
     order["total"] = total
-    return "\n".join(lines) + f"\n\n💰 Итого: {total}₽"
+    return "\n".join(lines) + f"\n\nИтого: {total}р."
 
-@bot.on.message()
-async def handle(message: Message):
-    user_id = message.from_id
-    text = message.text.strip()
-    state = get_state(user_id)
-    step = state["step"]
+def kb_main():
+    kb = VkKeyboard(one_time=False)
+    kb.add_button("Сделать предзаказ", color=VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("О боте", color=VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
 
-    # Получить имя пользователя
-    user_info = await bot.api.users.get(user_ids=[user_id])
-    user_name = f"{user_info[0].first_name} {user_info[0].last_name}" if user_info else "Пользователь"
+def kb_points():
+    kb = VkKeyboard(one_time=True)
+    for point in MANAGERS.keys():
+        kb.add_button(point, color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+    kb.add_button("Отмена", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
 
-    # ---- СТАРТ / ГЛАВНОЕ МЕНЮ ----
-    if text in ["Начать", "/start", "start", "🏠 Главная", "❌ Отмена"] or step == "start":
-        if text == "❌ Отмена":
-            reset_state(user_id)
-        state = get_state(user_id)
-        state["step"] = "main"
-        await message.answer(
-            "👋 Привет! Это бот предзаказов Eat to End.\n\nВыбери действие:",
-            keyboard=kb_main()
-        )
-        return
+def kb_categories():
+    kb = VkKeyboard(one_time=True)
+    for cat in MENU.keys():
+        kb.add_button(cat, color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+    kb.add_button("Корзина и далее", color=VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("Отмена", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
 
-    # ---- НАЧАЛО ЗАКАЗА ----
-    if text == "🛒 Сделать предзаказ" or (step == "main" and "заказ" in text.lower()):
-        state["step"] = "choose_point"
-        await message.answer("📍 Выбери точку самовывоза:", keyboard=kb_points())
-        return
+def kb_items(category):
+    kb = VkKeyboard(one_time=True)
+    items = list(MENU[category].items())
+    for i, (name, price) in enumerate(items):
+        short = name[:30]
+        kb.add_button(f"{short} {price}р", color=VkKeyboardColor.SECONDARY)
+        if (i + 1) % 2 == 0 and i < len(items) - 1:
+            kb.add_line()
+    kb.add_line()
+    kb.add_button("Назад к категориям", color=VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
 
-    # ---- ВЫБОР ТОЧКИ ----
-    if step == "choose_point":
-        for point in MANAGERS.keys():
-            if point in text:
-                state["order"]["point"] = point
-                state["step"] = "choose_category"
-                await message.answer(
-                    f"✅ Точка: {point}\n\nВыбери категорию блюд:",
-                    keyboard=kb_categories()
-                )
-                return
-        await message.answer("Пожалуйста, выбери точку из списка:", keyboard=kb_points())
-        return
+def kb_sauces():
+    kb = VkKeyboard(one_time=True)
+    for sauce in SAUCES:
+        kb.add_button(sauce, color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+    return kb.get_keyboard()
 
-    # ---- ВЫБОР КАТЕГОРИИ ----
-    if step == "choose_category":
-        if text == "✅ Корзина и далее":
-            if not state["order"]["items"]:
-                await message.answer("Корзина пуста! Добавь хотя бы одну позицию.", keyboard=kb_categories())
-                return
-            state["step"] = "choose_sauce"
-            await message.answer("🥫 Выбери соус:", keyboard=kb_sauces())
-            return
+def kb_extras():
+    kb = VkKeyboard(one_time=True)
+    extras = list(EXTRAS.items())[:6]
+    for extra, price in extras:
+        kb.add_button(f"{extra} +{price}р", color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+    kb.add_button("Готово без добавок", color=VkKeyboardColor.POSITIVE)
+    return kb.get_keyboard()
 
-        for cat in MENU.keys():
-            if cat in text:
-                state["step"] = "choose_item"
-                state["current_category"] = cat
-                await message.answer(f"Выбери позицию из «{cat}»:", keyboard=kb_items(cat))
-                return
+def kb_time(slots):
+    kb = VkKeyboard(one_time=True)
+    for i, slot in enumerate(slots[:12]):
+        kb.add_button(slot, color=VkKeyboardColor.SECONDARY)
+        if (i + 1) % 3 == 0:
+            kb.add_line()
+    kb.add_line()
+    kb.add_button("Отмена", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
 
-        await message.answer("Выбери категорию из меню:", keyboard=kb_categories())
-        return
+def kb_confirm():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Подтвердить заказ", color=VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("Начать заново", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
 
-    # ---- ВЫБОР ПОЗИЦИИ ----
-    if step == "choose_item":
-        if text == "◀️ Назад к категориям":
-            state["step"] = "choose_category"
-            cart_text = format_cart(state["order"])
-            await message.answer(f"🛒 Корзина:\n{cart_text}\n\nВыбери категорию:", keyboard=kb_categories())
-            return
+def send(vk, user_id, text, keyboard=None):
+    params = {"user_id": user_id, "message": text, "random_id": 0}
+    if keyboard:
+        params["keyboard"] = keyboard
+    vk.messages.send(**params)
 
-        # Ищем совпадение с позицией меню
-        cat = state.get("current_category", "")
-        found = False
-        for name, price in MENU.get(cat, {}).items():
-            if name in text:
-                if name in state["order"]["items"]:
-                    state["order"]["items"][name] += 1
-                else:
-                    state["order"]["items"][name] = 1
-                found = True
-                cart_text = format_cart(state["order"])
-                await message.answer(
-                    f"✅ Добавлено: {name}\n\n🛒 Корзина:\n{cart_text}\n\nДобавить ещё или перейти к оформлению?",
-                    keyboard=kb_items(cat)
-                )
-                break
+def main():
+    global order_counter
+    vk_session = vk_api.VkApi(token=VK_TOKEN)
+    vk = vk_session.get_api()
+    longpoll = VkLongPoll(vk_session)
+    print("Бот запущен!")
 
-        if not found:
-            await message.answer("Выбери позицию из списка:", keyboard=kb_items(cat))
-        return
+    for event in longpoll.listen():
+        if event.type == VkEventType.MESSAGE_NEW and event.to_me:
+            user_id = event.user_id
+            text = event.text.strip()
+            state = get_state(user_id)
+            step = state["step"]
 
-    # ---- ВЫБОР СОУСА ----
-    if step == "choose_sauce":
-        if text in SAUCES or text == "Без соуса":
-            state["order"]["sauce"] = text
-            state["step"] = "choose_extras"
-            await message.answer("➕ Хочешь добавки? (можно несколько):", keyboard=kb_extras())
-            return
-        await message.answer("Выбери соус:", keyboard=kb_sauces())
-        return
-
-    # ---- ДОБАВКИ ----
-    if step == "choose_extras":
-        if text == "✅ Без добавок / готово":
-            state["step"] = "choose_time"
-            slots = get_time_slots()
-            if not slots:
-                await message.answer("⚠️ К сожалению, мы уже закрыты. Приходи завтра с 10:00!")
-                reset_state(user_id)
-                return
-            await message.answer("⏰ На какое время сделать заказ?", keyboard=kb_time_slots())
-            return
-
-        # Добавка
-        for extra_name in EXTRAS.keys():
-            if extra_name in text:
-                if extra_name not in state["order"]["extras"]:
-                    state["order"]["extras"].append(extra_name)
-                await message.answer(
-                    f"✅ Добавлено: {extra_name}\nЕщё добавки или «Без добавок / готово»:",
-                    keyboard=kb_extras()
-                )
-                return
-
-        await message.answer("Выбери добавку или нажми «Без добавок / готово»:", keyboard=kb_extras())
-        return
-
-    # ---- ВРЕМЯ ГОТОВНОСТИ ----
-    if step == "choose_time":
-        if ":" in text:
-            time_val = text.replace("⏰ ", "").strip()
-            state["order"]["pickup_time"] = time_val
-            state["order"]["user_id"] = user_id
-            state["order"]["user_name"] = user_name
-            state["step"] = "confirm"
-
-            cart_text = format_cart(state["order"])
-            summary = (
-                f"📋 Твой заказ:\n\n"
-                f"📍 Точка: {state['order']['point']}\n"
-                f"⏰ Время: {time_val}\n"
-                f"🥫 Соус: {state['order']['sauce']}\n"
-                f"➕ Добавки: {', '.join(state['order']['extras']) or '—'}\n\n"
-                f"{cart_text}\n\n"
-                f"💳 Оплата при получении\n\n"
-                f"Всё верно?"
-            )
-            await message.answer(summary, keyboard=kb_confirm())
-            return
-        await message.answer("Выбери время из списка:", keyboard=kb_time_slots())
-        return
-
-    # ---- ПОДТВЕРЖДЕНИЕ ----
-    if step == "confirm":
-        if text == "✅ Подтвердить заказ":
             try:
-                order_num = save_order_to_sheet(state["order"])
-                order = state["order"]
+                user_info = vk.users.get(user_ids=user_id)
+                user_name = f"{user_info[0]['first_name']} {user_info[0]['last_name']}"
+            except:
+                user_name = "Клиент"
 
-                # Уведомление менеджеру точки
-                manager_id = MANAGERS.get(order["point"], ADMIN_VK_ID)
-                if manager_id:
-                    cart_text = format_cart(order)
-                    notif = (
-                        f"🆕 НОВЫЙ ЗАКАЗ #{order_num}\n\n"
-                        f"👤 {user_name} (vk.com/id{user_id})\n"
-                        f"📍 {order['point']}\n"
-                        f"⏰ Готовность: {order['pickup_time']}\n"
-                        f"🥫 Соус: {order['sauce']}\n"
-                        f"➕ Добавки: {', '.join(order['extras']) or '—'}\n\n"
-                        f"{cart_text}"
-                    )
-                    await bot.api.messages.send(
-                        user_id=manager_id,
-                        message=notif,
-                        random_id=0
-                    )
-
-                await message.answer(
-                    f"🎉 Заказ #{order_num} принят!\n\n"
-                    f"📍 {order['point']}\n"
-                    f"⏰ Будет готов к {order['pickup_time']}\n"
-                    f"💳 Оплата при получении\n\n"
-                    f"Ждём тебя! 🌯",
-                    keyboard=kb_main()
-                )
+            # СТАРТ
+            if text.lower() in ["начать", "start", "/start", "отмена", "начать заново"]:
                 reset_state(user_id)
-            except Exception as e:
-                await message.answer(f"⚠️ Ошибка при сохранении заказа. Попробуй ещё раз.\n{e}")
-            return
+                send(vk, user_id, "Привет! Это бот предзаказов Eat to End. Выбери действие:", kb_main())
+                continue
 
-        if text == "🗑 Очистить и начать заново":
-            reset_state(user_id)
-            await message.answer("Заказ сброшен. Начнём заново:", keyboard=kb_main())
-            return
+            # О БОТЕ
+            if text == "О боте":
+                send(vk, user_id,
+                    "Eat to End — предзаказ шаурмы\n\n"
+                    "Наши точки:\n"
+                    "Ленина 36/2 с 2\n"
+                    "Промышленная 13\n"
+                    "Советская 2/10 с 1\n\n"
+                    "Режим работы: 10:00 - 22:00\n"
+                    "Оплата при получении.",
+                    kb_main())
+                continue
 
-        await message.answer("Нажми «Подтвердить заказ» или «Очистить»:", keyboard=kb_confirm())
-        return
+            # НАЧАЛО ЗАКАЗА
+            if text == "Сделать предзаказ" or step == "main":
+                if text == "Сделать предзаказ":
+                    state["step"] = "choose_point"
+                    send(vk, user_id, "Выбери точку самовывоза:", kb_points())
+                    continue
+                else:
+                    send(vk, user_id, "Выбери действие:", kb_main())
+                    continue
 
-    # ---- О БОТЕ ----
-    if "О боте" in text or "о боте" in text:
-        await message.answer(
-            "🌯 Eat to End — предзаказ шаурмы\n\n"
-            "Наши точки:\n"
-            "📍 Ленина 36/2 с 2\n"
-            "📍 Промышленная 13\n"
-            "📍 Советская 2/10 с 1\n\n"
-            "Режим работы: 10:00 – 22:00\n"
-            "Оплата при получении.",
-            keyboard=kb_main()
-        )
-        return
+            # ВЫБОР ТОЧКИ
+            if step == "choose_point":
+                matched = None
+                for point in MANAGERS.keys():
+                    if point in text:
+                        matched = point
+                        break
+                if matched:
+                    state["order"]["point"] = matched
+                    state["step"] = "choose_category"
+                    send(vk, user_id, f"Точка: {matched}\n\nВыбери категорию:", kb_categories())
+                else:
+                    send(vk, user_id, "Выбери точку из списка:", kb_points())
+                continue
 
-    # ---- МОИ ЗАКАЗЫ (заглушка) ----
-    if "заказы" in text.lower():
-        await message.answer("📋 История заказов будет доступна в следующей версии.", keyboard=kb_main())
-        return
+            # ВЫБОР КАТЕГОРИИ
+            if step == "choose_category":
+                if text == "Корзина и далее":
+                    if not state["order"]["items"]:
+                        send(vk, user_id, "Корзина пуста! Добавь хотя бы одну позицию.", kb_categories())
+                    else:
+                        state["step"] = "choose_sauce"
+                        send(vk, user_id, "Выбери соус:", kb_sauces())
+                    continue
 
-    # Дефолт
-    await message.answer("Выбери действие:", keyboard=kb_main())
+                matched_cat = None
+                for cat in MENU.keys():
+                    if cat in text:
+                        matched_cat = cat
+                        break
+                if matched_cat:
+                    state["step"] = "choose_item"
+                    state["current_category"] = matched_cat
+                    send(vk, user_id, f"Выбери блюдо из {matched_cat}:", kb_items(matched_cat))
+                else:
+                    send(vk, user_id, "Выбери категорию:", kb_categories())
+                continue
+
+            # ВЫБОР БЛЮДА
+            if step == "choose_item":
+                if text == "Назад к категориям":
+                    state["step"] = "choose_category"
+                    cart = format_cart(state["order"])
+                    send(vk, user_id, f"Корзина:\n{cart}\n\nВыбери категорию:", kb_categories())
+                    continue
+
+                cat = state.get("current_category", "")
+                found = False
+                for name, price in MENU.get(cat, {}).items():
+                    if name in text or text.startswith(name[:15]):
+                        state["order"]["items"][name] = state["order"]["items"].get(name, 0) + 1
+                        found = True
+                        cart = format_cart(state["order"])
+                        send(vk, user_id, f"Добавлено: {name}\n\nКорзина:\n{cart}\n\nДобавить ещё?", kb_items(cat))
+                        break
+                if not found:
+                    send(vk, user_id, "Выбери позицию из списка:", kb_items(cat))
+                continue
+
+            # ВЫБОР СОУСА
+            if step == "choose_sauce":
+                if text in SAUCES:
+                    state["order"]["sauce"] = text
+                    state["step"] = "choose_extras"
+                    send(vk, user_id, "Хочешь добавки?", kb_extras())
+                else:
+                    send(vk, user_id, "Выбери соус:", kb_sauces())
+                continue
+
+            # ДОБАВКИ
+            if step == "choose_extras":
+                if text == "Готово без добавок":
+                    slots = get_time_slots()
+                    if not slots:
+                        send(vk, user_id, "Мы уже закрыты. Приходи завтра с 10:00!", kb_main())
+                        reset_state(user_id)
+                    else:
+                        state["step"] = "choose_time"
+                        send(vk, user_id, "На какое время готовить?", kb_time(slots))
+                    continue
+
+                matched_extra = None
+                for extra_name in EXTRAS.keys():
+                    if extra_name in text:
+                        matched_extra = extra_name
+                        break
+                if matched_extra:
+                    if matched_extra not in state["order"]["extras"]:
+                        state["order"]["extras"].append(matched_extra)
+                    send(vk, user_id, f"Добавлено: {matched_extra}\nЕщё добавки или 'Готово без добавок':", kb_extras())
+                else:
+                    send(vk, user_id, "Выбери добавку:", kb_extras())
+                continue
+
+            # ВРЕМЯ
+            if step == "choose_time":
+                slots = get_time_slots()
+                if text in slots:
+                    state["order"]["pickup_time"] = text
+                    state["step"] = "confirm"
+                    cart = format_cart(state["order"])
+                    summary = (
+                        f"Твой заказ:\n\n"
+                        f"Точка: {state['order']['point']}\n"
+                        f"Время готовности: {text}\n"
+                        f"Соус: {state['order']['sauce']}\n"
+                        f"Добавки: {', '.join(state['order']['extras']) or 'нет'}\n\n"
+                        f"{cart}\n\n"
+                        f"Оплата при получении\n\nВсё верно?"
+                    )
+                    send(vk, user_id, summary, kb_confirm())
+                else:
+                    send(vk, user_id, "Выбери время из списка:", kb_time(slots))
+                continue
+
+            # ПОДТВЕРЖДЕНИЕ
+            if step == "confirm":
+                if text == "Подтвердить заказ":
+                    order_counter += 1
+                    order = state["order"]
+                    cart = format_cart(order)
+
+                    manager_id = MANAGERS.get(order["point"], ADMIN_VK_ID)
+                    notif = (
+                        f"НОВЫЙ ЗАКАЗ #{order_counter}\n\n"
+                        f"Клиент: {user_name} (id{user_id})\n"
+                        f"Точка: {order['point']}\n"
+                        f"Время готовности: {order['pickup_time']}\n"
+                        f"Соус: {order['sauce']}\n"
+                        f"Добавки: {', '.join(order['extras']) or 'нет'}\n\n"
+                        f"{cart}\n\nОплата при получении"
+                    )
+                    try:
+                        vk.messages.send(user_id=manager_id, message=notif, random_id=0)
+                    except Exception as e:
+                        print(f"Ошибка уведомления: {e}")
+
+                    send(vk, user_id,
+                        f"Заказ #{order_counter} принят!\n\n"
+                        f"Точка: {order['point']}\n"
+                        f"Будет готов к {order['pickup_time']}\n"
+                        f"Оплата при получении\n\nЖдём тебя!",
+                        kb_main())
+                    reset_state(user_id)
+
+                elif text == "Начать заново":
+                    reset_state(user_id)
+                    send(vk, user_id, "Начнём заново:", kb_main())
+                else:
+                    send(vk, user_id, "Нажми 'Подтвердить заказ' или 'Начать заново':", kb_confirm())
+                continue
+
+            send(vk, user_id, "Выбери действие:", kb_main())
 
 if __name__ == "__main__":
-    print("Бот запущен...")
-    bot.run_forever()
+    main()
