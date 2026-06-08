@@ -201,7 +201,7 @@ def main():
     print("Бот запущен!")
 
     for event in longpoll.listen():
-        if event.type == VkEventType.MESSAGE_NEW and event.to_me and not event.from_me:
+        if event.type == VkEventType.MESSAGE_NEW and event.to_me and not event.from_me and event.from_id > 0:
             user_id = event.user_id
             text = event.text.strip()
             state = get_state(user_id)
