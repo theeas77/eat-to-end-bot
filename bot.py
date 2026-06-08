@@ -193,13 +193,26 @@ def kb_sauces():
     kb.add_button("Без соуса", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
-def kb_extras():
+def kb_extras_page1():
     kb = VkKeyboard(one_time=True)
-    for extra, price in list(EXTRAS.items()):
+    extras = list(EXTRAS.items())[:8]
+    for extra, price in extras:
+        kb.add_button(f"{extra} +{price}₽", color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+    kb.add_button("➡️ Ещё добавки", color=VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def kb_extras_page2():
+    kb = VkKeyboard(one_time=True)
+    extras = list(EXTRAS.items())[8:]
+    for extra, price in extras:
         kb.add_button(f"{extra} +{price}₽", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
     kb.add_button("✅ Без добавок", color=VkKeyboardColor.POSITIVE)
     return kb.get_keyboard()
+
+def kb_extras():
+    return kb_extras_page1()
 
 def kb_time(slots):
     kb = VkKeyboard(one_time=True)
@@ -390,6 +403,10 @@ def main():
 
         # ДОБАВКИ
         if step == "choose_extras":
+            if text == "➡️ Ещё добавки":
+                send(vk, user_id, "➕ Ещё добавки:", kb_extras_page2())
+                continue
+
             if text == "✅ Без добавок":
                 slots = get_time_slots(state["order"]["point"])
                 if not slots:
