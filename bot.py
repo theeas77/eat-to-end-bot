@@ -12,16 +12,16 @@ from vkbottle.bot import Bot, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text, Callback
 
 # ==================== НАСТРОЙКИ ====================
-VK_TOKEN = "ВАШ_ТОКЕН_ГРУППЫ_ВК"
+VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0xrx1B1TXjcaWMu1EAWDDrqfH9us2nT7381dpYQUaiiXbaZAwqZbpEVGQ9oxyw3Bqsu_mbdyWdFVKlhcbNZE3lybJXXGoadma1fWTdzjtADUvTTZR2bbIySqQn8_qlyj5bYTzaC1DzmOHoWGJkRH_szQsA"
 GOOGLE_CREDENTIALS_FILE = "credentials.json"  # файл ключей Google API
 GOOGLE_SHEET_NAME = "EatToEnd_Orders"         # название таблицы
 ADMIN_VK_ID = 0  # ВАШ VK ID для уведомлений (число)
 
 # Менеджеры точек: VK ID менеджера для каждой точки
 MANAGERS = {
-    "Ленина 36/2": 0,       # замените на VK ID менеджера
-    "Промышленная 13": 0,
-    "Советская 2/10": 0,
+    "Ленина 36/2": 1118370233,       # замените на VK ID менеджера
+    "Промышленная 13": 1118370233,
+    "Советская 2/10": 1118370233,
 }
 
 # ==================== МЕНЮ ====================
