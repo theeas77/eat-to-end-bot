@@ -1,20 +1,16 @@
 """
 VK-бот для предзаказов Eat to End
-Требования: pip install vkbottle gspread oauth2client
+Требования: pip install vkbottle
 """
 
 import asyncio
 import json
 import datetime
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 from vkbottle.bot import Bot, Message
 from vkbottle import Keyboard, KeyboardButtonColor, Text, Callback
 
 # ==================== НАСТРОЙКИ ====================
 VK_TOKEN = "ВАШ_ТОКЕН_ГРУППЫ_ВК"
-GOOGLE_CREDENTIALS_FILE = "credentials.json"  # файл ключей Google API
-GOOGLE_SHEET_NAME = "EatToEnd_Orders"         # название таблицы
 ADMIN_VK_ID = 0  # ВАШ VK ID для уведомлений (число)
 
 # Менеджеры точек: VK ID менеджера для каждой точки
