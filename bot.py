@@ -216,9 +216,9 @@ def kb_extras():
 
 def kb_time(slots):
     kb = VkKeyboard(one_time=True)
-    for i, slot in enumerate(slots):
+    for i, slot in enumerate(slots[:8]):
         kb.add_button(slot, color=VkKeyboardColor.SECONDARY)
-        if (i + 1) % 3 == 0:
+        if (i + 1) % 2 == 0:
             kb.add_line()
     kb.add_line()
     kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE)
