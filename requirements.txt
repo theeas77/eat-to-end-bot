@@ -1,3 +1,2 @@
-vkbottle
-gspread
-oauth2client
+vkbottle=4.3.6
+aiohttp=3.9.5
