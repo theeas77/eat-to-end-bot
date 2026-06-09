@@ -759,18 +759,29 @@ def main():
                 order = state["order"]
                 total = get_total(order)
                 state["order"]["order_num"] = order_counter
-                state["step"] = "choose_payment"
+                cart = format_cart(order)
 
-                kb = VkKeyboard(one_time=True)
-                kb.add_button("💳 Оплатить онлайн", color=VkKeyboardColor.POSITIVE)
-                kb.add_line()
-                kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
-
-                send(vk, user_id,
-                    f"✅ Заказ #{order_counter} оформлен!\n\n"
-                    f"💰 Сумма: {total}₽\n\n"
-                    f"Как будешь оплачивать?",
-                    kb.get_keyboard())
+                # Советская — только оплата при получении
+                if order["point"] == "Советская 2/10":
+                    state["step"] = "choose_payment"
+                    kb = VkKeyboard(one_time=True)
+                    kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.POSITIVE)
+                    send(vk, user_id,
+                        f"✅ Заказ #{order_counter} оформлен!\n\n"
+                        f"💰 Сумма: {total}₽\n\n"
+                        f"Оплата только при получении 💵",
+                        kb.get_keyboard())
+                else:
+                    state["step"] = "choose_payment"
+                    kb = VkKeyboard(one_time=True)
+                    kb.add_button("💳 Оплатить онлайн", color=VkKeyboardColor.POSITIVE)
+                    kb.add_line()
+                    kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
+                    send(vk, user_id,
+                        f"✅ Заказ #{order_counter} оформлен!\n\n"
+                        f"💰 Сумма: {total}₽\n\n"
+                        f"Как будешь оплачивать?",
+                        kb.get_keyboard())
 
             elif text == "🔄 Начать заново":
                 reset_state(user_id)
