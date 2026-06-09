@@ -181,12 +181,16 @@ def get_total(order):
     return total
 
 
+FEEDBACK_URL = "https://vk.com/app6013442_-232479429?form_id=1#form_id=1"
+
 def kb_main():
     kb = VkKeyboard(one_time=False)
     kb.add_button("🌯 Сделать предзаказ", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("📍 Наши точки", color=VkKeyboardColor.SECONDARY)
     kb.add_button("ℹ️ О нас", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("💬 Обратная связь", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
 
@@ -338,6 +342,11 @@ def main():
                 f"Твой быстрый перекус в удобном месте.\n"
                 f"Оформи предзаказ и забери готовое без очереди!",
                 kb_main())
+            continue
+
+        if text == "💬 Обратная связь":
+            msg = "💬 Оставь отзыв или напиши пожелание — нам важно твоё мнение!\n\n👉 " + FEEDBACK_URL
+            send(vk, user_id, msg)
             continue
 
         if text == "ℹ️ О нас":
