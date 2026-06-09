@@ -22,6 +22,11 @@ HOURS = {
     "Советская 2/10": (9, 21),
 }
 
+# Категории с соусом
+SAUCE_CATS = {"Шаурма и сэндвичи"}
+# Категории с добавками
+EXTRAS_CATS = {"Шаурма и сэндвичи", "Шашлык"}
+
 MENU = {
     "Шаурма и сэндвичи": {
         "С курицей мини": 235,
@@ -88,7 +93,12 @@ def get_state(user_id):
     if user_id not in user_states:
         user_states[user_id] = {
             "step": "main",
-            "order": {"items": {}, "extras": [], "sauce": None, "point": None, "pickup_time": None, "min_minutes": 15}
+            "order": {
+                "items": [],  # list of dicts: {name, price, sauce, extras}
+                "point": None,
+                "pickup_time": None,
+            },
+            "current_item": None,  # item being configured right now
         }
     return user_states[user_id]
 
@@ -96,7 +106,12 @@ def get_state(user_id):
 def reset_state(user_id):
     user_states[user_id] = {
         "step": "main",
-        "order": {"items": {}, "extras": [], "sauce": None, "point": None, "pickup_time": None, "min_minutes": 15}
+        "order": {
+            "items": [],
+            "point": None,
+            "pickup_time": None,
+        },
+        "current_item": None,
     }
 
 
@@ -114,20 +129,31 @@ def get_time_slots(point, min_minutes=15):
     open_h, close_h = HOURS.get(point, (9, 22))
     if close_h == 24:
         close_h = 23
-        close_m = 45
+        close_m = 59
     else:
         close_m = 0
 
     now = datetime.datetime.now(TZ)
     today = now.date()
-    current = datetime.datetime.combine(today, datetime.time(open_h, 0), tzinfo=TZ)
-    end_dt = datetime.datetime.combine(today, datetime.time(close_h, close_m), tzinfo=TZ)
     min_time = now + datetime.timedelta(minutes=min_minutes)
 
+    # Начинаем от ближайшего слота кратного 15 мин после min_time
+    # Округляем min_time вверх до ближайших 15 мин
+    mins = min_time.minute
+    rounded_mins = ((mins // 15) + 1) * 15
+    if rounded_mins >= 60:
+        start_time = min_time.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
+    else:
+        start_time = min_time.replace(minute=rounded_mins, second=0, microsecond=0)
+
+    end_dt = datetime.datetime.combine(today, datetime.time(close_h, close_m), tzinfo=TZ)
+    current = start_time
+
     while current <= end_dt:
-        if current > min_time:
+        if current.hour >= open_h:
             slots.append(current.strftime("%H:%M"))
         current += datetime.timedelta(minutes=15)
+
     return slots[:9]
 
 
@@ -136,20 +162,30 @@ def format_cart(order):
         return "Корзина пуста"
     lines = []
     total = 0
-    for item_name, qty in order["items"].items():
-        price = 0
-        for cat in MENU.values():
-            if item_name in cat:
-                price = cat[item_name]
-                break
-        lines.append(f"  {item_name} x{qty} — {price * qty}₽")
-        total += price * qty
-    for extra in order.get("extras", []):
-        price = EXTRAS.get(extra, 42)
-        lines.append(f"  + {extra} — {price}₽")
+    for item in order["items"]:
+        name = item["name"]
+        price = item["price"]
+        sauce = item.get("sauce")
+        extras = item.get("extras", [])
+        line = f"  {name} — {price}₽"
+        if sauce and sauce != "Без соуса":
+            line += f" (соус: {sauce})"
+        if extras:
+            line += f"\n    + {', '.join(extras)}"
+            extras_total = sum(EXTRAS.get(e, 42) for e in extras)
+            price += extras_total
+        lines.append(line)
         total += price
-    order["total"] = total
     return "\n".join(lines) + f"\n\n  Итого: {total}₽"
+
+
+def get_total(order):
+    total = 0
+    for item in order["items"]:
+        total += item["price"]
+        for e in item.get("extras", []):
+            total += EXTRAS.get(e, 42)
+    return total
 
 
 def kb_main():
@@ -176,7 +212,7 @@ def kb_categories():
     for cat in MENU.keys():
         kb.add_button(cat, color=VkKeyboardColor.SECONDARY)
         kb.add_line()
-    kb.add_button("🛒 Корзина и далее", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("🛒 Оформить заказ", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
@@ -224,6 +260,14 @@ def kb_extras_page2():
         kb.add_button(f"{extra} +{price}₽", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
     kb.add_button("✅ Без добавок", color=VkKeyboardColor.POSITIVE)
+    return kb.get_keyboard()
+
+
+def kb_after_item():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("➕ Добавить ещё", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🛒 Оформить заказ", color=VkKeyboardColor.POSITIVE)
     return kb.get_keyboard()
 
 
@@ -293,7 +337,6 @@ def main():
                 kb_main())
             continue
 
-        # О НАС
         if text == "ℹ️ О нас":
             send(vk, user_id,
                 "🌯 Eat to End — шаурма из шашлыка\n\n"
@@ -301,22 +344,16 @@ def main():
                 "в стильном заведении. Мясо на углях — наша фишка.\n\n"
                 "💳 Оплата при получении\n"
                 "📦 Предзаказ — без очереди\n\n"
-                "— Дружелюбно\n"
-                "— Честно\n"
-                "— Вкусно",
+                "— Дружелюбно\n— Честно\n— Вкусно",
                 kb_main())
             continue
 
-        # НАШИ ТОЧКИ
         if text == "📍 Наши точки":
             send(vk, user_id,
                 "📍 Наши точки:\n\n"
-                "1. Ленина 36/2 с 2\n"
-                "   ⏰ 09:00 — 00:00\n\n"
-                "2. Промышленная 13\n"
-                "   ⏰ 09:00 — 23:00\n\n"
-                "3. Советская 2/10 с 1\n"
-                "   ⏰ 09:00 — 21:00",
+                "1. Ленина 36/2 с 2\n   ⏰ 09:00 — 00:00\n\n"
+                "2. Промышленная 13\n   ⏰ 09:00 — 23:00\n\n"
+                "3. Советская 2/10 с 1\n   ⏰ 09:00 — 21:00",
                 kb_main())
             continue
 
@@ -355,12 +392,26 @@ def main():
 
         # ВЫБОР КАТЕГОРИИ
         if step == "choose_category":
-            if text == "🛒 Корзина и далее":
+            if text == "🛒 Оформить заказ":
                 if not state["order"]["items"]:
                     send(vk, user_id, "Корзина пуста! Добавь хотя бы одну позицию 😊", kb_categories())
                 else:
-                    state["step"] = "choose_sauce"
-                    send(vk, user_id, "🥫 Выбери соус:", kb_sauces())
+                    # Считаем мин время
+                    has_shashlik = any("Шашлык" in i["name"] for i in state["order"]["items"])
+                    min_min = 30 if has_shashlik else 15
+                    slots = get_time_slots(state["order"]["point"], min_minutes=min_min)
+                    if not slots:
+                        send(vk, user_id,
+                            "😔 Точка скоро закрывается, не успеем приготовить.\nПриходи завтра!",
+                            kb_main())
+                        reset_state(user_id)
+                    else:
+                        state["step"] = "choose_time"
+                        state["order"]["min_minutes"] = min_min
+                        hint = "⏰ На какое время готовить?\n\nВыбери из списка или напиши своё время в формате ЧЧ:ММ (например 14:30)"
+                        if has_shashlik:
+                            hint += "\n\n🔥 Шашлык готовится 30 минут — учли это в слотах"
+                        send(vk, user_id, hint, kb_time(slots))
                 continue
 
             matched_cat = None
@@ -388,49 +439,61 @@ def main():
             found = False
             for name, price in MENU.get(cat, {}).items():
                 if name in text or text.startswith(name[:10]):
-                    state["order"]["items"][name] = state["order"]["items"].get(name, 0) + 1
                     found = True
-                    cart = format_cart(state["order"])
-                    send(vk, user_id,
-                        f"✅ Добавлено: {name}\n\n🛒 Корзина:\n{cart}\n\nДобавить ещё?",
-                        kb_items(cat))
+                    # Сохраняем текущий выбранный item
+                    state["current_item"] = {"name": name, "price": price, "sauce": None, "extras": [], "cat": cat}
+
+                    if cat in SAUCE_CATS:
+                        state["step"] = "choose_sauce_for_item"
+                        send(vk, user_id,
+                            f"✅ {name}\n\nВыбери соус:",
+                            kb_sauces())
+                    elif cat in EXTRAS_CATS:
+                        state["step"] = "choose_extras_for_item"
+                        send(vk, user_id,
+                            f"✅ {name}\n\nХочешь добавки?",
+                            kb_extras_page1())
+                    else:
+                        # Напитки — сразу добавляем
+                        state["order"]["items"].append(state["current_item"])
+                        state["current_item"] = None
+                        state["step"] = "choose_category"
+                        cart = format_cart(state["order"])
+                        send(vk, user_id,
+                            f"✅ {name} добавлен!\n\n🛒 Корзина:\n{cart}\n\nДобавить ещё или оформить?",
+                            kb_after_item())
                     break
+
             if not found:
                 send(vk, user_id, "Выбери позицию из списка 👇", kb_items(cat))
             continue
 
-        # ВЫБОР СОУСА
-        if step == "choose_sauce":
+        # СОУС ДЛЯ ПОЗИЦИИ
+        if step == "choose_sauce_for_item":
             if text in SAUCES:
-                state["order"]["sauce"] = text
-                state["step"] = "choose_extras"
-                send(vk, user_id, "➕ Хочешь добавки? Можно выбрать несколько.", kb_extras_page1())
+                state["current_item"]["sauce"] = text
+                state["step"] = "choose_extras_for_item"
+                send(vk, user_id, "➕ Хочешь добавки?", kb_extras_page1())
             else:
                 send(vk, user_id, "Выбери соус 👇", kb_sauces())
             continue
 
-        # ДОБАВКИ
-        if step == "choose_extras":
+        # ДОБАВКИ ДЛЯ ПОЗИЦИИ
+        if step == "choose_extras_for_item":
             if text == "➡️ Ещё добавки":
                 send(vk, user_id, "➕ Ещё добавки:", kb_extras_page2())
                 continue
 
             if text == "✅ Без добавок":
-                has_shashlik = any("Шашлык" in item for item in state["order"]["items"])
-                min_min = 30 if has_shashlik else 15
-                state["order"]["min_minutes"] = min_min
-                slots = get_time_slots(state["order"]["point"], min_minutes=min_min)
-                if not slots:
-                    send(vk, user_id,
-                        "😔 К сожалению, точка скоро закрывается.\nПриходи завтра!",
-                        kb_main())
-                    reset_state(user_id)
-                else:
-                    state["step"] = "choose_time"
-                    hint = "⏰ На какое время готовить?\n\nВыбери из списка или напиши своё время в формате ЧЧ:ММ (например 14:30)"
-                    if has_shashlik:
-                        hint += "\n\n🔥 Шашлык готовится 30 минут — учли это в слотах"
-                    send(vk, user_id, hint, kb_time(slots))
+                # Добавляем позицию в корзину
+                state["order"]["items"].append(state["current_item"])
+                item_name = state["current_item"]["name"]
+                state["current_item"] = None
+                state["step"] = "choose_category"
+                cart = format_cart(state["order"])
+                send(vk, user_id,
+                    f"✅ {item_name} добавлен в корзину!\n\n🛒 Корзина:\n{cart}\n\nДобавить ещё или оформить?",
+                    kb_after_item())
                 continue
 
             matched_extra = None
@@ -439,13 +502,37 @@ def main():
                     matched_extra = extra_name
                     break
             if matched_extra:
-                if matched_extra not in state["order"]["extras"]:
-                    state["order"]["extras"].append(matched_extra)
+                if matched_extra not in state["current_item"]["extras"]:
+                    state["current_item"]["extras"].append(matched_extra)
                 send(vk, user_id,
-                    f"✅ Добавлено: {matched_extra}\nЕщё добавки или нажми «Без добавок»:",
+                    f"✅ {matched_extra} добавлен\nЕщё добавки или «Без добавок»:",
                     kb_extras_page1())
             else:
                 send(vk, user_id, "Выбери добавку 👇", kb_extras_page1())
+            continue
+
+        # ПОСЛЕ ДОБАВЛЕНИЯ ПОЗИЦИИ
+        if step == "choose_category" and text == "➕ Добавить ещё":
+            send(vk, user_id, "Выбери категорию:", kb_categories())
+            continue
+
+        if step == "choose_category" and text == "🛒 Оформить заказ":
+            if not state["order"]["items"]:
+                send(vk, user_id, "Корзина пуста!", kb_categories())
+            else:
+                has_shashlik = any("Шашлык" in i["name"] for i in state["order"]["items"])
+                min_min = 30 if has_shashlik else 15
+                slots = get_time_slots(state["order"]["point"], min_minutes=min_min)
+                if not slots:
+                    send(vk, user_id, "😔 Точка скоро закрывается.\nПриходи завтра!", kb_main())
+                    reset_state(user_id)
+                else:
+                    state["step"] = "choose_time"
+                    state["order"]["min_minutes"] = min_min
+                    hint = "⏰ На какое время готовить?\n\nВыбери из списка или напиши своё время в формате ЧЧ:ММ"
+                    if has_shashlik:
+                        hint += "\n\n🔥 Шашлык готовится 30 минут — учли это в слотах"
+                    send(vk, user_id, hint, kb_time(slots))
             continue
 
         # ВРЕМЯ
@@ -471,37 +558,28 @@ def main():
 
                     if input_dt < min_time:
                         send(vk, user_id,
-                            f"⚠️ Слишком рано! Минимальное время приготовления — {min_min} мин.\nВведи другое время:",
+                            f"⚠️ Слишком рано! Минимум через {min_min} мин.\nВведи другое время:",
                             kb_time(slots))
                     elif input_dt > close_dt:
-                        send(vk, user_id,
-                            f"⚠️ Точка уже будет закрыта.\nВыбери другое время:",
-                            kb_time(slots))
+                        send(vk, user_id, "⚠️ Точка уже будет закрыта.\nВыбери другое время:", kb_time(slots))
                     elif h < open_h:
-                        send(vk, user_id,
-                            f"⚠️ Точка открывается в {open_h}:00.\nВыбери другое время:",
-                            kb_time(slots))
+                        send(vk, user_id, f"⚠️ Точка открывается в {open_h}:00.", kb_time(slots))
                     else:
                         chosen_time = text
                 except:
-                    send(vk, user_id,
-                        "⚠️ Неверный формат. Напиши время как 14:30 или выбери из списка:",
-                        kb_time(slots))
+                    send(vk, user_id, "⚠️ Неверный формат. Напиши как 14:30:", kb_time(slots))
             else:
-                send(vk, user_id,
-                    "Выбери время из списка или напиши в формате ЧЧ:ММ (например 14:30) 👇",
-                    kb_time(slots))
+                send(vk, user_id, "Выбери время или напиши в формате ЧЧ:ММ 👇", kb_time(slots))
 
             if chosen_time:
                 state["order"]["pickup_time"] = chosen_time
                 state["step"] = "confirm"
                 cart = format_cart(state["order"])
+                total = get_total(state["order"])
                 summary = (
                     f"📋 Твой заказ:\n\n"
                     f"📍 {state['order']['point']}\n"
-                    f"⏰ Время готовности: {chosen_time}\n"
-                    f"🥫 Соус: {state['order']['sauce']}\n"
-                    f"➕ Добавки: {', '.join(state['order']['extras']) or 'нет'}\n\n"
+                    f"⏰ Время готовности: {chosen_time}\n\n"
                     f"{cart}\n\n"
                     f"💳 Оплата при получении\n\n"
                     f"Всё верно? 👇"
@@ -515,17 +593,17 @@ def main():
                 order_counter += 1
                 order = state["order"]
                 cart = format_cart(order)
+                total = get_total(order)
 
                 manager_id = MANAGERS.get(order["point"], ADMIN_VK_ID)
                 notif = (
                     f"🆕 НОВЫЙ ЗАКАЗ #{order_counter}\n\n"
                     f"👤 {user_name} (vk.com/id{user_id})\n"
                     f"📍 {order['point']}\n"
-                    f"⏰ Готовность: {order['pickup_time']}\n"
-                    f"🥫 Соус: {order['sauce']}\n"
-                    f"➕ Добавки: {', '.join(order['extras']) or 'нет'}\n\n"
+                    f"⏰ Готовность: {order['pickup_time']}\n\n"
                     f"{cart}\n\n"
-                    f"💳 Оплата при получении"
+                    f"💳 Оплата при получении\n"
+                    f"💰 Сумма: {total}₽"
                 )
                 try:
                     vk.messages.send(user_id=manager_id, message=notif, random_id=0)
@@ -535,7 +613,8 @@ def main():
                 send(vk, user_id,
                     f"🎉 Заказ #{order_counter} принят!\n\n"
                     f"📍 {order['point']}\n"
-                    f"⏰ Будет готов к {order['pickup_time']}\n\n"
+                    f"⏰ Будет готов к {order['pickup_time']}\n"
+                    f"💰 Сумма: {total}₽\n\n"
                     f"Оплата при получении 💳\n\n"
                     f"Ждём тебя, {first_name}! До встречи 🌯🔥",
                     kb_main())
