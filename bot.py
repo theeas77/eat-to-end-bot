@@ -3,9 +3,12 @@ from vk_api.longpoll import VkLongPoll, VkEventType
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 import datetime
 import time
+import json
+import os
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Yekaterinburg")  # UTC+5 Пермь
+COUNTER_FILE = "order_counter.json"
 
 VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0xrx1B1TXjcaWMu1EAWDDrqfH9us2nT7381dpYQUaiiXbaZAwqZbpEVGQ9oxyw3Bqsu_mbdyWdFVKlhcbNZE3lybJXXGoadma1fWTdzjtADUvTTZR2bbIySqQn8_qlyj5bYTzaC1DzmOHoWGJkRH_szQsA"
 ADMIN_VK_ID = 1118370233
@@ -84,9 +87,50 @@ EXTRAS = {
     "Свинина доп.": 77,
 }
 
-order_counter = 0
 user_states = {}
 processed_msgs = {}
+
+
+def load_counter():
+    """Загружает счётчик из файла"""
+    try:
+        if os.path.exists(COUNTER_FILE):
+            with open(COUNTER_FILE, "r") as f:
+                data = json.load(f)
+            saved_date = data.get("date")
+            today = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
+            if saved_date == today:
+                return data.get("counter", 0)
+    except:
+        pass
+    return 0
+
+
+def save_counter(counter):
+    """Сохраняет счётчик в файл"""
+    try:
+        today = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
+        with open(COUNTER_FILE, "w") as f:
+            json.dump({"date": today, "counter": counter}, f)
+    except:
+        pass
+
+
+def get_order_counter():
+    """Возвращает актуальный счётчик, сбрасывает если новый день"""
+    try:
+        if os.path.exists(COUNTER_FILE):
+            with open(COUNTER_FILE, "r") as f:
+                data = json.load(f)
+            saved_date = data.get("date")
+            today = datetime.datetime.now(TZ).strftime("%Y-%m-%d")
+            if saved_date == today:
+                return data.get("counter", 0)
+    except:
+        pass
+    # Новый день — сбрасываем
+    save_counter(0)
+    return 0
 
 
 def get_state(user_id):
@@ -303,7 +347,6 @@ def send(vk, user_id, text, keyboard=None):
 
 
 def main():
-    global order_counter
     vk_session = vk_api.VkApi(token=VK_TOKEN)
     vk = vk_session.get_api()
     longpoll = VkLongPoll(vk_session)
@@ -640,7 +683,8 @@ def main():
         # ПОДТВЕРЖДЕНИЕ
         if step == "confirm":
             if text == "✅ Подтвердить":
-                order_counter += 1
+                order_counter = get_order_counter() + 1
+                save_counter(order_counter)
                 order = state["order"]
                 cart = format_cart(order)
                 total = get_total(order)
