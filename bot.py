@@ -12,8 +12,13 @@ from zoneinfo import ZoneInfo
 TZ = ZoneInfo("Asia/Yekaterinburg")  # UTC+5 Пермь
 COUNTER_FILE = "order_counter.json"
 
+# ЮКасса для Ленина и Промышленная
 YUKASSA_SHOP_ID = "1378878"
 YUKASSA_SECRET_KEY = "live_WocTCMSmoycyvMP8ttX9_M4w2dsBMBWugjizIPvU2do"
+
+# ЮКасса для Советской
+YUKASSA_SHOP_ID_SOVETSKAYA = "1254695"
+YUKASSA_SECRET_KEY_SOVETSKAYA = "live_U_Z86aPDfocmL1uteRrfHhyXVigb4sqinsDwRD8v5Jo"
 
 VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0xrx1B1TXjcaWMu1EAWDDrqfH9us2nT7381dpYQUaiiXbaZAwqZbpEVGQ9oxyw3Bqsu_mbdyWdFVKlhcbNZE3lybJXXGoadma1fWTdzjtADUvTTZR2bbIySqQn8_qlyj5bYTzaC1DzmOHoWGJkRH_szQsA"
 ADMIN_VK_ID = 1118370233
@@ -121,13 +126,15 @@ def save_counter(counter):
         pass
 
 
-def create_payment(amount, order_num, description):
+def create_payment(amount, order_num, description, shop_id=None, secret_key=None):
     """Создаёт платёж в ЮКассе и возвращает ссылку"""
+    shop_id = shop_id or YUKASSA_SHOP_ID
+    secret_key = secret_key or YUKASSA_SECRET_KEY
     try:
         idempotence_key = str(uuid.uuid4())
         response = requests.post(
             "https://api.yookassa.ru/v3/payments",
-            auth=(YUKASSA_SHOP_ID, YUKASSA_SECRET_KEY),
+            auth=(shop_id, secret_key),
             headers={"Idempotence-Key": idempotence_key, "Content-Type": "application/json"},
             json={
                 "amount": {"value": str(amount) + ".00", "currency": "RUB"},
@@ -146,12 +153,14 @@ def create_payment(amount, order_num, description):
         return None, None
 
 
-def check_payment(payment_id):
+def check_payment(payment_id, shop_id=None, secret_key=None):
     """Проверяет статус платежа"""
+    shop_id = shop_id or YUKASSA_SHOP_ID
+    secret_key = secret_key or YUKASSA_SECRET_KEY
     try:
         response = requests.get(
             f"https://api.yookassa.ru/v3/payments/{payment_id}",
-            auth=(YUKASSA_SHOP_ID, YUKASSA_SECRET_KEY)
+            auth=(shop_id, secret_key)
         )
         data = response.json()
         return data.get("status")
@@ -760,27 +769,16 @@ def main():
                 state["order"]["order_num"] = order_counter
                 cart = format_cart(order)
 
-                # Советская — только оплата при получении
-                if order["point"] == "Советская 2/10":
-                    state["step"] = "choose_payment"
-                    kb = VkKeyboard(one_time=True)
-                    kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.POSITIVE)
-                    send(vk, user_id,
-                        f"✅ Заказ #{order_counter} оформлен!\n\n"
-                        f"💰 Сумма: {total}₽\n\n"
-                        f"Оплата только при получении 💵",
-                        kb.get_keyboard())
-                else:
-                    state["step"] = "choose_payment"
-                    kb = VkKeyboard(one_time=True)
-                    kb.add_button("💳 Оплатить онлайн", color=VkKeyboardColor.POSITIVE)
-                    kb.add_line()
-                    kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
-                    send(vk, user_id,
-                        f"✅ Заказ #{order_counter} оформлен!\n\n"
-                        f"💰 Сумма: {total}₽\n\n"
-                        f"Как будешь оплачивать?",
-                        kb.get_keyboard())
+                state["step"] = "choose_payment"
+                kb = VkKeyboard(one_time=True)
+                kb.add_button("💳 Оплатить онлайн", color=VkKeyboardColor.POSITIVE)
+                kb.add_line()
+                kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
+                send(vk, user_id,
+                    f"✅ Заказ #{order_counter} оформлен!\n\n"
+                    f"💰 Сумма: {total}₽\n\n"
+                    f"Как будешь оплачивать?",
+                    kb.get_keyboard())
 
             elif text == "🔄 Начать заново":
                 reset_state(user_id)
@@ -798,7 +796,13 @@ def main():
 
             if text == "💳 Оплатить онлайн":
                 description = f"Заказ #{order_num} Eat to End — {order['point']}"
-                pay_url, pay_id = create_payment(total, order_num, description)
+                # Выбираем ключи в зависимости от точки
+                if order["point"] == "Советская 2/10":
+                    pay_url, pay_id = create_payment(total, order_num, description,
+                        shop_id=YUKASSA_SHOP_ID_SOVETSKAYA,
+                        secret_key=YUKASSA_SECRET_KEY_SOVETSKAYA)
+                else:
+                    pay_url, pay_id = create_payment(total, order_num, description)
 
                 if pay_url:
                     state["order"]["payment_id"] = pay_id
@@ -836,6 +840,14 @@ def main():
             if text == "✅ Я оплатил":
                 payment_id = order.get("payment_id")
                 status = check_payment(payment_id) if payment_id else None
+
+                # Выбираем ключи для проверки
+                if order.get("point") == "Советская 2/10":
+                    status = check_payment(payment_id,
+                        shop_id=YUKASSA_SHOP_ID_SOVETSKAYA,
+                        secret_key=YUKASSA_SECRET_KEY_SOVETSKAYA) if payment_id else None
+                else:
+                    status = check_payment(payment_id) if payment_id else None
 
                 if status == "succeeded":
                     _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "✅ Оплачено онлайн")
