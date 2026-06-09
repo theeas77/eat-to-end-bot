@@ -5,7 +5,7 @@ import datetime
 import time
 from zoneinfo import ZoneInfo
 
-TZ = ZoneInfo("Asia/Yekaterinburg")  # UTC+5, Пермь
+TZ = ZoneInfo("Asia/Yekaterinburg")  # UTC+5 Пермь
 
 VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0xrx1B1TXjcaWMu1EAWDDrqfH9us2nT7381dpYQUaiiXbaZAwqZbpEVGQ9oxyw3Bqsu_mbdyWdFVKlhcbNZE3lybJXXGoadma1fWTdzjtADUvTTZR2bbIySqQn8_qlyj5bYTzaC1DzmOHoWGJkRH_szQsA"
 ADMIN_VK_ID = 1118370233
@@ -59,7 +59,6 @@ MENU = {
         "Апельсин 0.5л": 110,
         "Кола 0.3л": 90,
         "Лимон-лайм 0.3л": 90,
-        "Апельсин 0.3л": 90,
     },
 }
 
@@ -84,19 +83,22 @@ order_counter = 0
 user_states = {}
 processed_msgs = {}
 
+
 def get_state(user_id):
     if user_id not in user_states:
         user_states[user_id] = {
             "step": "main",
-            "order": {"items": {}, "extras": [], "sauce": None, "point": None, "pickup_time": None}
+            "order": {"items": {}, "extras": [], "sauce": None, "point": None, "pickup_time": None, "min_minutes": 15}
         }
     return user_states[user_id]
+
 
 def reset_state(user_id):
     user_states[user_id] = {
         "step": "main",
-        "order": {"items": {}, "extras": [], "sauce": None, "point": None, "pickup_time": None}
+        "order": {"items": {}, "extras": [], "sauce": None, "point": None, "pickup_time": None, "min_minutes": 15}
     }
+
 
 def is_point_open(point):
     now = datetime.datetime.now(TZ)
@@ -106,7 +108,8 @@ def is_point_open(point):
         return current_h >= open_h
     return open_h <= current_h < close_h
 
-def get_time_slots(point):
+
+def get_time_slots(point, min_minutes=15):
     slots = []
     open_h, close_h = HOURS.get(point, (9, 22))
     if close_h == 24:
@@ -115,15 +118,18 @@ def get_time_slots(point):
     else:
         close_m = 0
 
-    current = datetime.datetime.combine(datetime.date.today(), datetime.time(open_h, 0))
-    end_dt = datetime.datetime.combine(datetime.date.today(), datetime.time(close_h, close_m))
-    now = datetime.datetime.now() + datetime.timedelta(minutes=20)
+    now = datetime.datetime.now(TZ)
+    today = now.date()
+    current = datetime.datetime.combine(today, datetime.time(open_h, 0), tzinfo=TZ)
+    end_dt = datetime.datetime.combine(today, datetime.time(close_h, close_m), tzinfo=TZ)
+    min_time = now + datetime.timedelta(minutes=min_minutes)
 
     while current <= end_dt:
-        if current > now:
+        if current > min_time:
             slots.append(current.strftime("%H:%M"))
         current += datetime.timedelta(minutes=15)
-    return slots[:12]
+    return slots[:9]
+
 
 def format_cart(order):
     if not order["items"]:
@@ -145,6 +151,7 @@ def format_cart(order):
     order["total"] = total
     return "\n".join(lines) + f"\n\n  Итого: {total}₽"
 
+
 def kb_main():
     kb = VkKeyboard(one_time=False)
     kb.add_button("🌯 Сделать предзаказ", color=VkKeyboardColor.POSITIVE)
@@ -152,6 +159,7 @@ def kb_main():
     kb.add_button("📍 Наши точки", color=VkKeyboardColor.SECONDARY)
     kb.add_button("ℹ️ О нас", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
+
 
 def kb_points():
     kb = VkKeyboard(one_time=True)
@@ -161,6 +169,7 @@ def kb_points():
         kb.add_line()
     kb.add_button("◀️ Назад", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
+
 
 def kb_categories():
     kb = VkKeyboard(one_time=True)
@@ -172,14 +181,15 @@ def kb_categories():
     kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
+
 def kb_items(category):
     kb = VkKeyboard(one_time=True)
-    items = list(MENU[category].items())
-    for i, (name, price) in enumerate(items):
+    for name, price in MENU[category].items():
         kb.add_button(f"{name} {price}₽", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
     kb.add_button("◀️ К категориям", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
+
 
 def kb_sauces():
     kb = VkKeyboard(one_time=True)
@@ -196,6 +206,7 @@ def kb_sauces():
     kb.add_button("Без соуса", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
+
 def kb_extras_page1():
     kb = VkKeyboard(one_time=True)
     extras = list(EXTRAS.items())[:8]
@@ -204,6 +215,7 @@ def kb_extras_page1():
         kb.add_line()
     kb.add_button("➡️ Ещё добавки", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
+
 
 def kb_extras_page2():
     kb = VkKeyboard(one_time=True)
@@ -214,16 +226,15 @@ def kb_extras_page2():
     kb.add_button("✅ Без добавок", color=VkKeyboardColor.POSITIVE)
     return kb.get_keyboard()
 
-def kb_extras():
-    return kb_extras_page1()
 
 def kb_time(slots):
     kb = VkKeyboard(one_time=True)
-    for i, slot in enumerate(slots[:9]):
+    for slot in slots[:9]:
         kb.add_button(slot, color=VkKeyboardColor.SECONDARY)
         kb.add_line()
     kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
+
 
 def kb_confirm():
     kb = VkKeyboard(one_time=True)
@@ -232,11 +243,13 @@ def kb_confirm():
     kb.add_button("🔄 Начать заново", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
+
 def send(vk, user_id, text, keyboard=None):
     params = {"user_id": user_id, "message": text, "random_id": 0}
     if keyboard:
         params["keyboard"] = keyboard
     vk.messages.send(**params)
+
 
 def main():
     global order_counter
@@ -249,15 +262,11 @@ def main():
         if not (event.type == VkEventType.MESSAGE_NEW and event.to_me and not event.from_me):
             continue
 
-        # Защита от дублирования
         msg_key = f"{event.user_id}_{event.message_id}"
         if msg_key in processed_msgs:
             continue
         processed_msgs[msg_key] = time.time()
-
-        # Чистим старые ключи каждые 1000 сообщений
         if len(processed_msgs) > 1000:
-            cutoff = time.time() - 60
             processed_msgs.clear()
 
         user_id = event.user_id
@@ -289,8 +298,7 @@ def main():
             send(vk, user_id,
                 "🌯 Eat to End — шаурма из шашлыка\n\n"
                 "Мы готовим из качественных продуктов "
-                "в стильном заведении. Мясо на углях — "
-                "наша фишка.\n\n"
+                "в стильном заведении. Мясо на углях — наша фишка.\n\n"
                 "💳 Оплата при получении\n"
                 "📦 Предзаказ — без очереди\n\n"
                 "— Дружелюбно\n"
@@ -316,8 +324,7 @@ def main():
         if text == "🌯 Сделать предзаказ":
             state["step"] = "choose_point"
             send(vk, user_id,
-                "📍 Выбери точку самовывоза:\n\n"
-                "✅ — открыто  ❌ — закрыто",
+                "📍 Выбери точку самовывоза:\n\n✅ — открыто  ❌ — закрыто",
                 kb_points())
             continue
 
@@ -333,7 +340,7 @@ def main():
                     open_h, close_h = HOURS[matched]
                     send(vk, user_id,
                         f"😔 Точка {matched} сейчас закрыта.\n"
-                        f"Режим работы: {open_h}:00 — {close_h if close_h != 24 else '00'}:00\n\n"
+                        f"Режим работы: {open_h}:00 — {'00' if close_h == 24 else close_h}:00\n\n"
                         f"Выбери другую точку или приходи в рабочее время!",
                         kb_points())
                 else:
@@ -385,7 +392,7 @@ def main():
                     found = True
                     cart = format_cart(state["order"])
                     send(vk, user_id,
-                        f"✅ Добавлено: {name}\n\n🛒 Корзина:\n{cart}\n\nДобавить ещё или перейти к оформлению?",
+                        f"✅ Добавлено: {name}\n\n🛒 Корзина:\n{cart}\n\nДобавить ещё?",
                         kb_items(cat))
                     break
             if not found:
@@ -397,7 +404,7 @@ def main():
             if text in SAUCES:
                 state["order"]["sauce"] = text
                 state["step"] = "choose_extras"
-                send(vk, user_id, "➕ Хочешь добавки? Можно выбрать несколько.", kb_extras())
+                send(vk, user_id, "➕ Хочешь добавки? Можно выбрать несколько.", kb_extras_page1())
             else:
                 send(vk, user_id, "Выбери соус 👇", kb_sauces())
             continue
@@ -409,23 +416,20 @@ def main():
                 continue
 
             if text == "✅ Без добавок":
-                # Шашлык готовится 30 минут, остальное 15
                 has_shashlik = any("Шашлык" in item for item in state["order"]["items"])
                 min_min = 30 if has_shashlik else 15
+                state["order"]["min_minutes"] = min_min
                 slots = get_time_slots(state["order"]["point"], min_minutes=min_min)
                 if not slots:
                     send(vk, user_id,
-                        "😔 К сожалению, точка скоро закрывается и мы не успеем приготовить заказ.\n"
-                        "Приходи завтра!",
+                        "😔 К сожалению, точка скоро закрывается.\nПриходи завтра!",
                         kb_main())
                     reset_state(user_id)
                 else:
-                    state["order"]["has_shashlik"] = has_shashlik
-                    state["order"]["min_minutes"] = min_min
                     state["step"] = "choose_time"
-                    hint = "⏰ На какое время готовить?\n\nМожно выбрать из списка или написать своё время в формате ЧЧ:ММ (например, 14:30)"
+                    hint = "⏰ На какое время готовить?\n\nВыбери из списка или напиши своё время в формате ЧЧ:ММ (например 14:30)"
                     if has_shashlik:
-                        hint += "\n\n🔥 У тебя шашлык — минимальное время приготовления 30 минут"
+                        hint += "\n\n🔥 Шашлык готовится 30 минут — учли это в слотах"
                     send(vk, user_id, hint, kb_time(slots))
                 continue
 
@@ -439,39 +443,39 @@ def main():
                     state["order"]["extras"].append(matched_extra)
                 send(vk, user_id,
                     f"✅ Добавлено: {matched_extra}\nЕщё добавки или нажми «Без добавок»:",
-                    kb_extras())
+                    kb_extras_page1())
             else:
-                send(vk, user_id, "Выбери добавку 👇", kb_extras())
+                send(vk, user_id, "Выбери добавку 👇", kb_extras_page1())
             continue
 
         # ВРЕМЯ
         if step == "choose_time":
             min_min = state["order"].get("min_minutes", 15)
             slots = get_time_slots(state["order"]["point"], min_minutes=min_min)
-            
+
             chosen_time = None
-            
+
             if text in slots:
                 chosen_time = text
-            elif ":" in text and len(text) == 5:
-                # Проверяем введённое вручную время
+            elif len(text) == 5 and ":" in text:
                 try:
                     now = datetime.datetime.now(TZ)
                     h, m = map(int, text.split(":"))
                     input_dt = datetime.datetime.combine(now.date(), datetime.time(h, m), tzinfo=TZ)
                     min_time = now + datetime.timedelta(minutes=min_min)
                     open_h, close_h = HOURS.get(state["order"]["point"], (9, 22))
-                    close_real = 24 if close_h == 24 else close_h
-                    close_dt = datetime.datetime.combine(now.date(), datetime.time(23 if close_h == 24 else close_h, 45 if close_h == 24 else 0), tzinfo=TZ)
-                    
+                    if close_h == 24:
+                        close_dt = datetime.datetime.combine(now.date(), datetime.time(23, 59), tzinfo=TZ)
+                    else:
+                        close_dt = datetime.datetime.combine(now.date(), datetime.time(close_h, 0), tzinfo=TZ)
+
                     if input_dt < min_time:
                         send(vk, user_id,
-                            f"⚠️ Слишком рано! Минимальное время — через {min_min} минут.\n"
-                            f"Выбери время из списка или введи другое:",
+                            f"⚠️ Слишком рано! Минимальное время приготовления — {min_min} мин.\nВведи другое время:",
                             kb_time(slots))
                     elif input_dt > close_dt:
                         send(vk, user_id,
-                            f"⚠️ Точка уже будет закрыта в это время.\nВыбери другое время:",
+                            f"⚠️ Точка уже будет закрыта.\nВыбери другое время:",
                             kb_time(slots))
                     elif h < open_h:
                         send(vk, user_id,
@@ -480,9 +484,13 @@ def main():
                     else:
                         chosen_time = text
                 except:
-                    send(vk, user_id, "⚠️ Неверный формат. Введи время как 14:30 или выбери из списка:", kb_time(slots))
+                    send(vk, user_id,
+                        "⚠️ Неверный формат. Напиши время как 14:30 или выбери из списка:",
+                        kb_time(slots))
             else:
-                send(vk, user_id, "Выбери время из списка или напиши в формате ЧЧ:ММ (например, 14:30) 👇", kb_time(slots))
+                send(vk, user_id,
+                    "Выбери время из списка или напиши в формате ЧЧ:ММ (например 14:30) 👇",
+                    kb_time(slots))
 
             if chosen_time:
                 state["order"]["pickup_time"] = chosen_time
@@ -541,10 +549,8 @@ def main():
             continue
 
         # Дефолт
-        send(vk, user_id,
-            f"Привет, {first_name}! 👋\n"
-            f"Выбери действие:",
-            kb_main())
+        send(vk, user_id, f"Привет, {first_name}! 👋\nВыбери действие:", kb_main())
+
 
 if __name__ == "__main__":
     main()
