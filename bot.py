@@ -137,14 +137,12 @@ def get_time_slots(point, min_minutes=15):
     today = now.date()
     min_time = now + datetime.timedelta(minutes=min_minutes)
 
-    # Начинаем от ближайшего слота кратного 15 мин после min_time
-    # Округляем min_time вверх до ближайших 15 мин
+    # Округляем вверх до ближайших 5 минут
     mins = min_time.minute
-    rounded_mins = ((mins // 15) + 1) * 15
-    if rounded_mins >= 60:
-        start_time = min_time.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
-    else:
-        start_time = min_time.replace(minute=rounded_mins, second=0, microsecond=0)
+    remainder = mins % 5
+    if remainder != 0:
+        min_time = min_time + datetime.timedelta(minutes=(5 - remainder))
+    start_time = min_time.replace(second=0, microsecond=0)
 
     end_dt = datetime.datetime.combine(today, datetime.time(close_h, close_m), tzinfo=TZ)
     current = start_time
@@ -152,7 +150,7 @@ def get_time_slots(point, min_minutes=15):
     while current <= end_dt:
         if current.hour >= open_h:
             slots.append(current.strftime("%H:%M"))
-        current += datetime.timedelta(minutes=15)
+        current += datetime.timedelta(minutes=5)
 
     return slots[:9]
 
