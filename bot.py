@@ -238,11 +238,21 @@ def kb_sauces():
 
 def kb_extras_page1():
     kb = VkKeyboard(one_time=True)
-    extras = list(EXTRAS.items())[:8]
+    extras = list(EXTRAS.items())[:7]
     for extra, price in extras:
         kb.add_button(f"{extra} +{price}₽", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
+    kb.add_button("🥫 Доп соус +42₽", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
     kb.add_button("➡️ Ещё добавки", color=VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+def kb_extra_sauces():
+    kb = VkKeyboard(one_time=True)
+    for sauce in SAUCES[:-1]:  # все кроме "Без соуса"
+        kb.add_button(f"{sauce} +42₽", color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+    kb.add_button("◀️ Назад к добавкам", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
 
@@ -489,19 +499,38 @@ def main():
                     kb_after_item())
                 continue
 
-            matched_extra = None
-            for extra_name in EXTRAS.keys():
-                if extra_name in text:
-                    matched_extra = extra_name
+            if text == "🥫 Доп соус +42₽":
+                send(vk, user_id, "Выбери соус:", kb_extra_sauces())
+                continue
+
+            if text == "◀️ Назад к добавкам":
+                send(vk, user_id, "➕ Добавки:", kb_extras_page1())
+                continue
+
+            # Доп соус выбран
+            for sauce in SAUCES[:-1]:
+                if f"{sauce} +42₽" == text:
+                    extra_name = f"Соус {sauce}"
+                    if extra_name not in state["current_item"]["extras"]:
+                        state["current_item"]["extras"].append(extra_name)
+                    send(vk, user_id,
+                        f"✅ {extra_name} добавлен\nЕщё добавки или «Без добавок»:",
+                        kb_extras_page1())
                     break
-            if matched_extra:
-                if matched_extra not in state["current_item"]["extras"]:
-                    state["current_item"]["extras"].append(matched_extra)
-                send(vk, user_id,
-                    f"✅ {matched_extra} добавлен\nЕщё добавки или «Без добавок»:",
-                    kb_extras_page1())
             else:
-                send(vk, user_id, "Выбери добавку 👇", kb_extras_page1())
+                matched_extra = None
+                for extra_name in EXTRAS.keys():
+                    if extra_name in text:
+                        matched_extra = extra_name
+                        break
+                if matched_extra:
+                    if matched_extra not in state["current_item"]["extras"]:
+                        state["current_item"]["extras"].append(matched_extra)
+                    send(vk, user_id,
+                        f"✅ {matched_extra} добавлен\nЕщё добавки или «Без добавок»:",
+                        kb_extras_page1())
+                else:
+                    send(vk, user_id, "Выбери добавку 👇", kb_extras_page1())
             continue
 
         # ПОСЛЕ ДОБАВЛЕНИЯ ПОЗИЦИИ
@@ -566,18 +595,35 @@ def main():
 
             if chosen_time:
                 state["order"]["pickup_time"] = chosen_time
+                state["step"] = "enter_phone"
+                send(vk, user_id,
+                    "📱 Укажи номер телефона для связи\n\n"
+                    "Напиши в формате: 89991234567")
+            continue
+
+        # ТЕЛЕФОН
+        if step == "enter_phone":
+            phone = text.strip().replace(" ", "").replace("-", "").replace("+", "")
+            if phone.startswith("8") and len(phone) == 11 and phone.isdigit():
+                state["order"]["phone"] = phone
                 state["step"] = "confirm"
                 cart = format_cart(state["order"])
                 total = get_total(state["order"])
                 summary = (
                     f"📋 Твой заказ:\n\n"
                     f"📍 {state['order']['point']}\n"
-                    f"⏰ Время готовности: {chosen_time}\n\n"
+                    f"⏰ Время готовности: {state['order']['pickup_time']}\n"
+                    f"📱 Телефон: {phone}\n\n"
                     f"{cart}\n\n"
                     f"💳 Оплата при получении\n\n"
                     f"Всё верно? 👇"
                 )
                 send(vk, user_id, summary, kb_confirm())
+            else:
+                send(vk, user_id,
+                    "⚠️ Неверный формат номера.\n\n"
+                    "Напиши в формате: 89991234567\n"
+                    "(11 цифр, начиная с 8)")
             continue
 
         # ПОДТВЕРЖДЕНИЕ
@@ -592,6 +638,7 @@ def main():
                 notif = (
                     f"🆕 НОВЫЙ ЗАКАЗ #{order_counter}\n\n"
                     f"👤 {user_name} (vk.com/id{user_id})\n"
+                    f"📱 {order.get('phone', 'не указан')}\n"
                     f"📍 {order['point']}\n"
                     f"⏰ Готовность: {order['pickup_time']}\n\n"
                     f"{cart}\n\n"
