@@ -5,10 +5,15 @@ import datetime
 import time
 import json
 import os
+import uuid
+import requests
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Yekaterinburg")  # UTC+5 Пермь
 COUNTER_FILE = "order_counter.json"
+
+YUKASSA_SHOP_ID = "1378878"
+YUKASSA_SECRET_KEY = "live_WocTCMSmoycyvMP8ttX9_M4w2dsBMBWugjizIPvU2do"
 
 VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0xrx1B1TXjcaWMu1EAWDDrqfH9us2nT7381dpYQUaiiXbaZAwqZbpEVGQ9oxyw3Bqsu_mbdyWdFVKlhcbNZE3lybJXXGoadma1fWTdzjtADUvTTZR2bbIySqQn8_qlyj5bYTzaC1DzmOHoWGJkRH_szQsA"
 ADMIN_VK_ID = 1118370233
@@ -114,6 +119,44 @@ def save_counter(counter):
             json.dump({"date": today, "counter": counter}, f)
     except:
         pass
+
+
+def create_payment(amount, order_num, description):
+    """Создаёт платёж в ЮКассе и возвращает ссылку"""
+    try:
+        idempotence_key = str(uuid.uuid4())
+        response = requests.post(
+            "https://api.yookassa.ru/v3/payments",
+            auth=(YUKASSA_SHOP_ID, YUKASSA_SECRET_KEY),
+            headers={"Idempotence-Key": idempotence_key, "Content-Type": "application/json"},
+            json={
+                "amount": {"value": str(amount) + ".00", "currency": "RUB"},
+                "confirmation": {"type": "redirect", "return_url": "https://vk.com"},
+                "capture": True,
+                "description": description,
+                "metadata": {"order_num": str(order_num)}
+            }
+        )
+        data = response.json()
+        if "confirmation" in data:
+            return data["confirmation"]["confirmation_url"], data["id"]
+        return None, None
+    except Exception as e:
+        print(f"Ошибка создания платежа: {e}")
+        return None, None
+
+
+def check_payment(payment_id):
+    """Проверяет статус платежа"""
+    try:
+        response = requests.get(
+            f"https://api.yookassa.ru/v3/payments/{payment_id}",
+            auth=(YUKASSA_SHOP_ID, YUKASSA_SECRET_KEY)
+        )
+        data = response.json()
+        return data.get("status")
+    except:
+        return None
 
 
 def get_order_counter():
@@ -344,6 +387,34 @@ def send(vk, user_id, text, keyboard=None):
     if keyboard:
         params["keyboard"] = keyboard
     vk.messages.send(**params)
+
+
+def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, payment_status):
+    """Финализирует заказ — уведомляет менеджера и клиента"""
+    manager_id = MANAGERS.get(order["point"], ADMIN_VK_ID)
+    notif = (
+        f"🆕 НОВЫЙ ЗАКАЗ #{order_num}\n\n"
+        f"👤 {user_name} (vk.com/id{user_id})\n"
+        f"📱 {order.get('phone', 'не указан')}\n"
+        f"📍 {order['point']}\n"
+        f"⏰ Готовность: {order['pickup_time']}\n\n"
+        f"{cart}\n\n"
+        f"💰 Сумма: {total}₽\n"
+        f"💳 {payment_status}"
+    )
+    try:
+        vk.messages.send(user_id=manager_id, message=notif, random_id=0)
+    except Exception as e:
+        print(f"Ошибка уведомления: {e}")
+
+    send(vk, user_id,
+        f"🎉 Заказ #{order_num} принят!\n\n"
+        f"📍 {order['point']}\n"
+        f"⏰ Будет готов к {order['pickup_time']}\n"
+        f"💰 Сумма: {total}₽\n"
+        f"💳 {payment_status}\n\n"
+        f"Ждём тебя, {first_name}! До встречи 🌯🔥",
+        kb_main())
 
 
 def main():
@@ -686,34 +757,20 @@ def main():
                 order_counter = get_order_counter() + 1
                 save_counter(order_counter)
                 order = state["order"]
-                cart = format_cart(order)
                 total = get_total(order)
+                state["order"]["order_num"] = order_counter
+                state["step"] = "choose_payment"
 
-                manager_id = MANAGERS.get(order["point"], ADMIN_VK_ID)
-                notif = (
-                    f"🆕 НОВЫЙ ЗАКАЗ #{order_counter}\n\n"
-                    f"👤 {user_name} (vk.com/id{user_id})\n"
-                    f"📱 {order.get('phone', 'не указан')}\n"
-                    f"📍 {order['point']}\n"
-                    f"⏰ Готовность: {order['pickup_time']}\n\n"
-                    f"{cart}\n\n"
-                    f"💳 Оплата при получении\n"
-                    f"💰 Сумма: {total}₽"
-                )
-                try:
-                    vk.messages.send(user_id=manager_id, message=notif, random_id=0)
-                except Exception as e:
-                    print(f"Ошибка уведомления: {e}")
+                kb = VkKeyboard(one_time=True)
+                kb.add_button("💳 Оплатить онлайн", color=VkKeyboardColor.POSITIVE)
+                kb.add_line()
+                kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
 
                 send(vk, user_id,
-                    f"🎉 Заказ #{order_counter} принят!\n\n"
-                    f"📍 {order['point']}\n"
-                    f"⏰ Будет готов к {order['pickup_time']}\n"
+                    f"✅ Заказ #{order_counter} оформлен!\n\n"
                     f"💰 Сумма: {total}₽\n\n"
-                    f"Оплата при получении 💳\n\n"
-                    f"Ждём тебя, {first_name}! До встречи 🌯🔥",
-                    kb_main())
-                reset_state(user_id)
+                    f"Как будешь оплачивать?",
+                    kb.get_keyboard())
 
             elif text == "🔄 Начать заново":
                 reset_state(user_id)
@@ -721,6 +778,76 @@ def main():
             else:
                 send(vk, user_id, "Нажми «Подтвердить» или «Начать заново» 👇", kb_confirm())
             continue
+
+        # ВЫБОР ОПЛАТЫ
+        if step == "choose_payment":
+            order = state["order"]
+            total = get_total(order)
+            order_num = order.get("order_num", 0)
+            cart = format_cart(order)
+
+            if text == "💳 Оплатить онлайн":
+                description = f"Заказ #{order_num} Eat to End — {order['point']}"
+                pay_url, pay_id = create_payment(total, order_num, description)
+
+                if pay_url:
+                    state["order"]["payment_id"] = pay_id
+                    state["step"] = "wait_payment"
+                    kb = VkKeyboard(one_time=True)
+                    kb.add_button("✅ Я оплатил", color=VkKeyboardColor.POSITIVE)
+                    kb.add_line()
+                    kb.add_button("💵 Оплачу при получении", color=VkKeyboardColor.SECONDARY)
+                    send(vk, user_id,
+                        f"💳 Ссылка для оплаты заказа #{order_num}:\n\n"
+                        f"{pay_url}\n\n"
+                        f"После оплаты нажми «Я оплатил»",
+                        kb.get_keyboard())
+                else:
+                    send(vk, user_id,
+                        "⚠️ Не удалось создать ссылку на оплату.\nОплатишь при получении?",
+                        kb_main())
+                    # Всё равно принимаем заказ
+                    _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Оплата при получении")
+                    reset_state(user_id)
+                continue
+
+            if text == "💵 Оплата при получении":
+                _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Оплата при получении")
+                reset_state(user_id)
+                continue
+
+        # ОЖИДАНИЕ ОПЛАТЫ
+        if step == "wait_payment":
+            order = state["order"]
+            total = get_total(order)
+            order_num = order.get("order_num", 0)
+            cart = format_cart(order)
+
+            if text == "✅ Я оплатил":
+                payment_id = order.get("payment_id")
+                status = check_payment(payment_id) if payment_id else None
+
+                if status == "succeeded":
+                    _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "✅ Оплачено онлайн")
+                    reset_state(user_id)
+                elif status == "pending":
+                    send(vk, user_id,
+                        "⏳ Платёж ещё обрабатывается. Подожди минуту и нажми снова.",
+                        None)
+                else:
+                    kb = VkKeyboard(one_time=True)
+                    kb.add_button("✅ Я оплатил", color=VkKeyboardColor.POSITIVE)
+                    kb.add_line()
+                    kb.add_button("💵 Оплачу при получении", color=VkKeyboardColor.SECONDARY)
+                    send(vk, user_id,
+                        "⚠️ Оплата не найдена. Попробуй ещё раз или выбери оплату при получении.",
+                        kb.get_keyboard())
+                continue
+
+            if text == "💵 Оплачу при получении":
+                _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Оплата при получении")
+                reset_state(user_id)
+                continue
 
         # Дефолт
         send(vk, user_id, f"Привет, {first_name}! 👋\nВыбери действие:", kb_main())
