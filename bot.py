@@ -740,7 +740,6 @@ def main():
                     f"⏰ Время готовности: {state['order']['pickup_time']}\n"
                     f"📱 Телефон: {phone}\n\n"
                     f"{cart}\n\n"
-                    f"💳 Оплата при получении\n\n"
                     f"Всё верно? 👇"
                 )
                 send(vk, user_id, summary, kb_confirm())
