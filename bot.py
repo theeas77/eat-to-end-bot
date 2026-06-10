@@ -126,24 +126,59 @@ def save_counter(counter):
         pass
 
 
-def create_payment(amount, order_num, description, shop_id=None, secret_key=None):
+def create_payment(amount, order_num, description, phone=None, items=None, shop_id=None, secret_key=None):
     """Создаёт платёж в ЮКассе и возвращает ссылку"""
     shop_id = shop_id or YUKASSA_SHOP_ID
     secret_key = secret_key or YUKASSA_SECRET_KEY
     print(f"Создаю платёж: shop_id={shop_id}, amount={amount}, order={order_num}")
     try:
         idempotence_key = str(uuid.uuid4())
+
+        # Формируем номенклатуру для чека
+        receipt_items = []
+        if items:
+            for item in items:
+                item_amount = item["price"]
+                for e in item.get("extras", []):
+                    item_amount += EXTRAS.get(e, 42)
+                receipt_items.append({
+                    "description": item["name"][:128],
+                    "quantity": "1.00",
+                    "amount": {"value": f"{item_amount}.00", "currency": "RUB"},
+                    "vat_code": 1,  # без НДС
+                    "payment_mode": "full_payment",
+                    "payment_subject": "commodity"
+                })
+        else:
+            receipt_items.append({
+                "description": description[:128],
+                "quantity": "1.00",
+                "amount": {"value": f"{amount}.00", "currency": "RUB"},
+                "vat_code": 1,
+                "payment_mode": "full_payment",
+                "payment_subject": "commodity"
+            })
+
+        payload = {
+            "amount": {"value": f"{amount}.00", "currency": "RUB"},
+            "confirmation": {"type": "redirect", "return_url": "https://vk.com"},
+            "capture": True,
+            "description": description,
+            "metadata": {"order_num": str(order_num)},
+            "receipt": {
+                "items": receipt_items
+            }
+        }
+
+        # Добавляем телефон покупателя для чека
+        if phone:
+            payload["receipt"]["customer"] = {"phone": phone}
+
         response = requests.post(
             "https://api.yookassa.ru/v3/payments",
             auth=(shop_id, secret_key),
             headers={"Idempotence-Key": idempotence_key, "Content-Type": "application/json"},
-            json={
-                "amount": {"value": str(amount) + ".00", "currency": "RUB"},
-                "confirmation": {"type": "redirect", "return_url": "https://vk.com"},
-                "capture": True,
-                "description": description,
-                "metadata": {"order_num": str(order_num)}
-            }
+            json=payload
         )
         print(f"Ответ ЮКассы: {response.status_code} — {response.text[:300]}")
         data = response.json()
@@ -799,12 +834,16 @@ def main():
             if text == "💳 Оплатить онлайн":
                 description = f"Заказ #{order_num} Eat to End — {order['point']}"
                 # Выбираем ключи в зависимости от точки
+                phone = order.get("phone", "")
+                items = order.get("items", [])
                 if order["point"] == "Советская 2/10":
                     pay_url, pay_id = create_payment(total, order_num, description,
+                        phone=phone, items=items,
                         shop_id=YUKASSA_SHOP_ID_SOVETSKAYA,
                         secret_key=YUKASSA_SECRET_KEY_SOVETSKAYA)
                 else:
-                    pay_url, pay_id = create_payment(total, order_num, description)
+                    pay_url, pay_id = create_payment(total, order_num, description,
+                        phone=phone, items=items)
 
                 if pay_url:
                     state["order"]["payment_id"] = pay_id
