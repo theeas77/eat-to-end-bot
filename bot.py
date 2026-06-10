@@ -130,6 +130,7 @@ def create_payment(amount, order_num, description, shop_id=None, secret_key=None
     """Создаёт платёж в ЮКассе и возвращает ссылку"""
     shop_id = shop_id or YUKASSA_SHOP_ID
     secret_key = secret_key or YUKASSA_SECRET_KEY
+    print(f"Создаю платёж: shop_id={shop_id}, amount={amount}, order={order_num}")
     try:
         idempotence_key = str(uuid.uuid4())
         response = requests.post(
@@ -144,6 +145,7 @@ def create_payment(amount, order_num, description, shop_id=None, secret_key=None
                 "metadata": {"order_num": str(order_num)}
             }
         )
+        print(f"Ответ ЮКассы: {response.status_code} — {response.text[:300]}")
         data = response.json()
         if "confirmation" in data:
             return data["confirmation"]["confirmation_url"], data["id"]
