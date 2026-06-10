@@ -612,9 +612,10 @@ def main():
             cat = state.get("current_category", "")
             found = False
             for name, price in MENU.get(cat, {}).items():
-                if name in text or text.startswith(name[:10]):
+                # Точное совпадение: кнопка содержит имя + цену вида "Название 350₽"
+                expected = f"{name} {price}₽"
+                if text == expected or text == name:
                     found = True
-                    # Сохраняем текущий выбранный item
                     state["current_item"] = {"name": name, "price": price, "sauce": None, "extras": [], "cat": cat}
 
                     if cat in SAUCE_CATS:
