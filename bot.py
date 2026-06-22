@@ -25,13 +25,13 @@ ADMIN_VK_ID = 1118370233
 
 MANAGERS = {
     "Ленина 36/2": 1118370233,
-    "Промышленная 13": 1118370233,
+    "Декабристов 4а": 1118370233,
     "Советская 2/10": 1118370233,
 }
 
 HOURS = {
     "Ленина 36/2": (9, 24),
-    "Промышленная 13": (9, 23),
+    "Декабристов 4а": (9, 23),
     "Советская 2/10": (9, 21),
 }
 
@@ -327,9 +327,25 @@ def kb_main():
     return kb.get_keyboard()
 
 
+COMING_SOON_POINTS = {"Декабристов 4а"}
+
 def kb_points():
     kb = VkKeyboard(one_time=True)
     for point in MANAGERS.keys():
+        if point in COMING_SOON_POINTS:
+            kb.add_button(f"🔜 {point} — скоро открытие", color=VkKeyboardColor.SECONDARY)
+        else:
+            status = "✅" if is_point_open(point) else "❌"
+            kb.add_button(f"{status} {point}", color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+    kb.add_button("◀️ Назад", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
+
+def kb_points_without_dekabristov():
+    kb = VkKeyboard(one_time=True)
+    for point in MANAGERS.keys():
+        if point in COMING_SOON_POINTS:
+            continue
         status = "✅" if is_point_open(point) else "❌"
         kb.add_button(f"{status} {point}", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
@@ -526,7 +542,7 @@ def main():
             send(vk, user_id,
                 "📍 Наши точки:\n\n"
                 "1. Ленина 36/2 с 2\n   ⏰ 09:00 — 00:00\n\n"
-                "2. Промышленная 13\n   ⏰ 09:00 — 23:00\n\n"
+                "2. Декабристов 4а\n   🔜 Скоро открытие!\n\n"
                 "3. Советская 2/10 с 1\n   ⏰ 09:00 — 21:00",
                 kb_main())
             continue
@@ -547,7 +563,12 @@ def main():
                     matched = point
                     break
             if matched:
-                if not is_point_open(matched):
+                if matched in COMING_SOON_POINTS:
+                    send(vk, user_id,
+                        f"🔜 Точка на Декабристов 4а откроется на этой неделе!\n\n"
+                        f"Пока можешь сделать заказ на другой точке 👇",
+                        kb_points_without_dekabristov())
+                elif not is_point_open(matched):
                     open_h, close_h = HOURS[matched]
                     send(vk, user_id,
                         f"😔 Точка {matched} сейчас закрыта.\n"
