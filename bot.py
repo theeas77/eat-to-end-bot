@@ -327,7 +327,7 @@ def kb_main():
     return kb.get_keyboard()
 
 
-COMING_SOON_POINTS = {"Декабристов 4а"}
+COMING_SOON_POINTS = set()  # все точки открыты
 
 def kb_points():
     kb = VkKeyboard(one_time=True)
@@ -397,7 +397,7 @@ def kb_extras_page1():
         kb.add_line()
     kb.add_button("🥫 Доп соус +42₽", color=VkKeyboardColor.SECONDARY)
     kb.add_line()
-    kb.add_button("➡️ Ещё добавки", color=VkKeyboardColor.SECONDARY)
+    kb.add_button("➡️ Далее", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
 def kb_extra_sauces():
@@ -515,6 +515,7 @@ def main():
             send(vk, user_id,
                 f"Привет, {first_name}! 👋\n\n"
                 f"Добро пожаловать в Eat to End — шаурма из шашлыка 🌯🔥\n\n"
+                f"🆕 Новость! Открылась новая точка на Декабристов 4а — заходи!\n\n"
                 f"Твой быстрый перекус в удобном месте.\n"
                 f"Оформи предзаказ и забери готовое без очереди!",
                 kb_main())
@@ -532,7 +533,8 @@ def main():
                 "🌯 Eat to End — шаурма из шашлыка\n\n"
                 "Мы готовим из качественных продуктов "
                 "в стильном заведении. Мясо на углях — наша фишка.\n\n"
-                "💳 Оплата при получении\n"
+                "🆕 Открылась новая точка на Декабристов 4а!\n\n"
+                "💳 Оплата при получении или онлайн\n"
                 "📦 Предзаказ — без очереди\n\n"
                 "— Дружелюбно\n— Честно\n— Вкусно",
                 kb_main())
@@ -542,7 +544,7 @@ def main():
             send(vk, user_id,
                 "📍 Наши точки:\n\n"
                 "1. Ленина 36/2 с 2\n   ⏰ 09:00 — 00:00\n\n"
-                "2. Декабристов 4а\n   🔜 Скоро открытие!\n\n"
+                "2. Декабристов 4а\n   ⏰ 09:00 — 23:00\n\n"
                 "3. Советская 2/10 с 1\n   ⏰ 09:00 — 23:00",
                 kb_main())
             continue
@@ -676,7 +678,7 @@ def main():
 
         # ДОБАВКИ ДЛЯ ПОЗИЦИИ
         if step == "choose_extras_for_item":
-            if text == "➡️ Ещё добавки":
+            if text == "➡️ Далее":
                 send(vk, user_id, "➕ Ещё добавки:", kb_extras_page2())
                 continue
 
