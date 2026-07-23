@@ -6,6 +6,7 @@ import time
 import json
 import os
 import uuid
+import threading
 import requests
 from zoneinfo import ZoneInfo
 
@@ -99,6 +100,7 @@ EXTRAS = {
 
 user_states = {}
 processed_msgs = {}
+pending_payments = {}  # payment_id -> данные заказа, ждущего оплаты
 
 
 def load_counter():
@@ -178,7 +180,8 @@ def create_payment(amount, order_num, description, phone=None, items=None, shop_
             "https://api.yookassa.ru/v3/payments",
             auth=(shop_id, secret_key),
             headers={"Idempotence-Key": idempotence_key, "Content-Type": "application/json"},
-            json=payload
+            json=payload,
+            timeout=10
         )
         print(f"Ответ ЮКассы: {response.status_code} — {response.text[:300]}")
         data = response.json()
@@ -197,7 +200,8 @@ def check_payment(payment_id, shop_id=None, secret_key=None):
     try:
         response = requests.get(
             f"https://api.yookassa.ru/v3/payments/{payment_id}",
-            auth=(shop_id, secret_key)
+            auth=(shop_id, secret_key),
+            timeout=10
         )
         data = response.json()
         return data.get("status")
@@ -448,7 +452,15 @@ def send(vk, user_id, text, keyboard=None):
     params = {"user_id": user_id, "message": text, "random_id": 0}
     if keyboard:
         params["keyboard"] = keyboard
-    vk.messages.send(**params)
+    # Три попытки — сеть до ВК иногда обрывается
+    for attempt in range(3):
+        try:
+            vk.messages.send(**params)
+            return True
+        except Exception as e:
+            print(f"Не отправилось (попытка {attempt + 1}): {e}")
+            time.sleep(2)
+    return False
 
 
 def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, payment_status):
@@ -479,13 +491,60 @@ def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, 
         kb_main())
 
 
+def safe_listen(vk_session):
+    """Слушает события ВК. При обрыве сети — переподключается, а не падает"""
+    while True:
+        try:
+            longpoll = VkLongPoll(vk_session)
+            for event in longpoll.listen():
+                yield event
+        except Exception as e:
+            print(f"Сбой связи с ВК: {e} — переподключаюсь через 5 сек")
+            time.sleep(5)
+
+
+def payment_watcher(vk):
+    """Фоновая проверка оплат — раз в 15 секунд"""
+    while True:
+        time.sleep(15)
+        try:
+            for pid in list(pending_payments.keys()):
+                info = pending_payments.get(pid)
+                if not info:
+                    continue
+
+                # Заказ висит больше 40 минут — убираем из ожидания
+                if time.time() - info["created_at"] > 2400:
+                    pending_payments.pop(pid, None)
+                    print(f"Платёж {pid} просрочен, убран из ожидания")
+                    continue
+
+                status = check_payment(pid,
+                    shop_id=info["shop_id"],
+                    secret_key=info["secret_key"])
+
+                if status == "succeeded":
+                    pending_payments.pop(pid, None)
+                    print(f"Платёж {pid} оплачен — отправляю заказ #{info['order_num']}")
+                    _finalize_order(vk, info["user_id"], info["user_name"],
+                        info["first_name"], info["order"], info["order_num"],
+                        info["cart"], info["total"], "✅ Оплачено онлайн")
+                    reset_state(info["user_id"])
+                elif status == "canceled":
+                    pending_payments.pop(pid, None)
+                    print(f"Платёж {pid} отменён")
+        except Exception as e:
+            print(f"Ошибка в payment_watcher: {e}")
+
+
 def main():
     vk_session = vk_api.VkApi(token=VK_TOKEN)
     vk = vk_session.get_api()
-    longpoll = VkLongPoll(vk_session)
+
+    threading.Thread(target=payment_watcher, args=(vk,), daemon=True).start()
     print("Бот запущен!")
 
-    for event in longpoll.listen():
+    for event in safe_listen(vk_session):
         if not (event.type == VkEventType.MESSAGE_NEW and event.to_me and not event.from_me):
             continue
 
@@ -496,8 +555,12 @@ def main():
         if len(processed_msgs) > 1000:
             processed_msgs.clear()
 
-        user_id = event.user_id
-        text = event.text.strip()
+        try:
+          user_id = event.user_id
+          text = event.text.strip()
+        except:
+            continue
+
         state = get_state(user_id)
         step = state["step"]
 
@@ -872,6 +935,26 @@ def main():
                 if pay_url:
                     state["order"]["payment_id"] = pay_id
                     state["step"] = "wait_payment"
+
+                    # Регистрируем платёж для фоновой проверки
+                    if order["point"] == "Советская 2/10":
+                        w_shop, w_key = YUKASSA_SHOP_ID_SOVETSKAYA, YUKASSA_SECRET_KEY_SOVETSKAYA
+                    else:
+                        w_shop, w_key = YUKASSA_SHOP_ID, YUKASSA_SECRET_KEY
+
+                    pending_payments[pay_id] = {
+                        "user_id": user_id,
+                        "user_name": user_name,
+                        "first_name": first_name,
+                        "order": dict(order),
+                        "order_num": order_num,
+                        "cart": cart,
+                        "total": total,
+                        "created_at": time.time(),
+                        "shop_id": w_shop,
+                        "secret_key": w_key,
+                    }
+
                     kb = VkKeyboard(one_time=True)
                     kb.add_button("✅ Я оплатил", color=VkKeyboardColor.POSITIVE)
                     kb.add_line()
@@ -879,7 +962,7 @@ def main():
                     send(vk, user_id,
                         f"💳 Ссылка для оплаты заказа #{order_num}:\n\n"
                         f"{pay_url}\n\n"
-                        f"После оплаты нажми «Я оплатил»",
+                        f"После оплаты заказ уйдёт на кухню автоматически 👌",
                         kb.get_keyboard())
                 else:
                     send(vk, user_id,
@@ -915,7 +998,11 @@ def main():
                     status = check_payment(payment_id) if payment_id else None
 
                 if status == "succeeded":
-                    _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "✅ Оплачено онлайн")
+                    if payment_id in pending_payments:
+                        pending_payments.pop(payment_id, None)
+                        _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "✅ Оплачено онлайн")
+                    else:
+                        send(vk, user_id, "✅ Оплата уже получена, заказ на кухне!", kb_main())
                     reset_state(user_id)
                 elif status == "pending":
                     send(vk, user_id,
@@ -932,6 +1019,7 @@ def main():
                 continue
 
             if text == "💵 Оплачу при получении":
+                pending_payments.pop(order.get("payment_id"), None)
                 _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Оплата при получении")
                 reset_state(user_id)
                 continue
