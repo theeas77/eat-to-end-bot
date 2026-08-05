@@ -30,8 +30,9 @@ MANAGERS = {
     "Советская 2/10": 1118370233,
 }
 
+# Время закрытия > 24 означает переход через полночь (29 = 05:00 следующего дня)
 HOURS = {
-    "Ленина 36/2": (9, 24),
+    "Ленина 36/2": (9, 29),
     "Декабристов 4а": (9, 23),
     "Советская 2/10": (9, 23),
 }
@@ -255,33 +256,38 @@ def reset_state(user_id):
 def is_point_open(point):
     now = datetime.datetime.now(TZ)
     open_h, close_h = HOURS.get(point, (9, 22))
-    current_h = now.hour
-    if close_h == 24:
-        return current_h >= open_h
-    return open_h <= current_h < close_h
+    h = now.hour + now.minute / 60
+    if close_h <= 24:
+        return open_h <= h < close_h
+    # Переход через полночь: открыто с open_h до 24:00 ИЛИ с 00:00 до (close_h - 24)
+    return h >= open_h or h < (close_h - 24)
 
 
 def get_time_slots(point, min_minutes=15):
     slots = []
     open_h, close_h = HOURS.get(point, (9, 22))
-    if close_h == 24:
-        close_h = 23
-        close_m = 59
-    else:
-        close_m = 0
 
     now = datetime.datetime.now(TZ)
-    today = now.date()
 
-    # Первый слот = текущее время + min_minutes, округлённое до минуты
+    # Первый слот = текущее время + min_minutes
     start_time = (now + datetime.timedelta(minutes=min_minutes)).replace(second=0, microsecond=0)
 
-    end_dt = datetime.datetime.combine(today, datetime.time(close_h, close_m), tzinfo=TZ)
-    current = start_time
+    # Момент закрытия. Если close_h > 24 — закрытие на следующий день
+    if close_h <= 24:
+        end_dt = datetime.datetime.combine(now.date(), datetime.time(close_h % 24, 0), tzinfo=TZ)
+        if close_h == 24:
+            end_dt = datetime.datetime.combine(now.date(), datetime.time(23, 59), tzinfo=TZ)
+    else:
+        # Закрытие после полуночи. Если сейчас уже после полуночи (до закрытия) — закрытие сегодня, иначе завтра
+        real_close = close_h - 24
+        if now.hour < real_close:
+            end_dt = datetime.datetime.combine(now.date(), datetime.time(real_close, 0), tzinfo=TZ)
+        else:
+            end_dt = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(real_close, 0), tzinfo=TZ)
 
+    current = start_time
     while current <= end_dt:
-        if current.hour >= open_h:
-            slots.append(current.strftime("%H:%M"))
+        slots.append(current.strftime("%H:%M"))
         current += datetime.timedelta(minutes=10)
 
     return slots[:9]
@@ -332,12 +338,15 @@ def kb_main():
 
 
 COMING_SOON_POINTS = set()  # все точки открыты
+CLOSED_POINTS = {"Советская 2/10"}  # временно закрыты
 
 def kb_points():
     kb = VkKeyboard(one_time=True)
     for point in MANAGERS.keys():
         if point in COMING_SOON_POINTS:
             kb.add_button(f"🔜 {point} — скоро открытие", color=VkKeyboardColor.SECONDARY)
+        elif point in CLOSED_POINTS:
+            kb.add_button(f"⛔ {point} — временно закрыта", color=VkKeyboardColor.SECONDARY)
         else:
             status = "✅" if is_point_open(point) else "❌"
             kb.add_button(f"{status} {point}", color=VkKeyboardColor.SECONDARY)
@@ -348,7 +357,7 @@ def kb_points():
 def kb_points_without_dekabristov():
     kb = VkKeyboard(one_time=True)
     for point in MANAGERS.keys():
-        if point in COMING_SOON_POINTS:
+        if point in COMING_SOON_POINTS or point in CLOSED_POINTS:
             continue
         status = "✅" if is_point_open(point) else "❌"
         kb.add_button(f"{status} {point}", color=VkKeyboardColor.SECONDARY)
@@ -606,9 +615,9 @@ def main():
         if text == "📍 Наши точки":
             send(vk, user_id,
                 "📍 Наши точки:\n\n"
-                "1. Ленина 36/2 с 2\n   ⏰ 09:00 — 00:00\n\n"
+                "1. Ленина 36/2 с 2\n   ⏰ 09:00 — 05:00\n\n"
                 "2. Декабристов 4а\n   ⏰ 09:00 — 23:00\n\n"
-                "3. Советская 2/10 с 1\n   ⏰ 09:00 — 23:00",
+                "3. Советская 2/10 с 1\n   ⛔ Временно закрыта",
                 kb_main())
             continue
 
@@ -630,14 +639,20 @@ def main():
             if matched:
                 if matched in COMING_SOON_POINTS:
                     send(vk, user_id,
-                        f"🔜 Точка на Декабристов 4а откроется на этой неделе!\n\n"
+                        f"🔜 Точка на {matched} откроется на этой неделе!\n\n"
+                        f"Пока можешь сделать заказ на другой точке 👇",
+                        kb_points_without_dekabristov())
+                elif matched in CLOSED_POINTS:
+                    send(vk, user_id,
+                        f"⛔ Точка {matched} временно закрыта.\n\n"
                         f"Пока можешь сделать заказ на другой точке 👇",
                         kb_points_without_dekabristov())
                 elif not is_point_open(matched):
                     open_h, close_h = HOURS[matched]
+                    close_str = f"{close_h % 24:02d}:00" if close_h != 24 else "00:00"
                     send(vk, user_id,
                         f"😔 Точка {matched} сейчас закрыта.\n"
-                        f"Режим работы: {open_h}:00 — {'00' if close_h == 24 else close_h}:00\n\n"
+                        f"Режим работы: {open_h:02d}:00 — {close_str}\n\n"
                         f"Выбери другую точку или приходи в рабочее время!",
                         kb_points())
                 else:
@@ -828,13 +843,32 @@ def main():
                 try:
                     now = datetime.datetime.now(TZ)
                     h, m = map(int, text.split(":"))
-                    input_dt = datetime.datetime.combine(now.date(), datetime.time(h, m), tzinfo=TZ)
-                    min_time = now + datetime.timedelta(minutes=min_min)
+                    if not (0 <= h <= 23 and 0 <= m <= 59):
+                        raise ValueError
                     open_h, close_h = HOURS.get(state["order"]["point"], (9, 22))
-                    if close_h == 24:
-                        close_dt = datetime.datetime.combine(now.date(), datetime.time(23, 59), tzinfo=TZ)
+                    min_time = now + datetime.timedelta(minutes=min_min)
+
+                    # Определяем дату заказа с учётом ночных точек
+                    input_dt = datetime.datetime.combine(now.date(), datetime.time(h, m), tzinfo=TZ)
+                    # Если точка работает через полночь и введён час до времени закрытия — это следующий день
+                    if close_h > 24 and h < (close_h - 24):
+                        input_dt += datetime.timedelta(days=1)
+                    # Если введённое время уже прошло сегодня — считаем на завтра
+                    if input_dt < now:
+                        input_dt += datetime.timedelta(days=1)
+
+                    # Момент закрытия
+                    if close_h <= 24:
+                        close_dt = datetime.datetime.combine(input_dt.date(), datetime.time(close_h % 24, 0), tzinfo=TZ)
+                        if close_h == 24:
+                            close_dt = datetime.datetime.combine(input_dt.date(), datetime.time(23, 59), tzinfo=TZ)
                     else:
-                        close_dt = datetime.datetime.combine(now.date(), datetime.time(close_h, 0), tzinfo=TZ)
+                        real_close = close_h - 24
+                        base = input_dt.date() if h < real_close else input_dt.date() + datetime.timedelta(days=1)
+                        close_dt = datetime.datetime.combine(base, datetime.time(real_close, 0), tzinfo=TZ)
+
+                    # Момент открытия в дату заказа
+                    open_dt = datetime.datetime.combine(input_dt.date(), datetime.time(open_h, 0), tzinfo=TZ)
 
                     if input_dt < min_time:
                         send(vk, user_id,
@@ -842,8 +876,8 @@ def main():
                             kb_time(slots))
                     elif input_dt > close_dt:
                         send(vk, user_id, "⚠️ Точка уже будет закрыта.\nВыбери другое время:", kb_time(slots))
-                    elif h < open_h:
-                        send(vk, user_id, f"⚠️ Точка открывается в {open_h}:00.", kb_time(slots))
+                    elif close_h <= 24 and input_dt < open_dt:
+                        send(vk, user_id, f"⚠️ Точка открывается в {open_h:02d}:00.", kb_time(slots))
                     else:
                         chosen_time = text
                 except:
