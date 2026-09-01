@@ -24,6 +24,19 @@ YUKASSA_SECRET_KEY_SOVETSKAYA = "live_U_Z86aPDfocmL1uteRrfHhyXVigb4sqinsDwRD8v5J
 VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0xrx1B1TXjcaWMu1EAWDDrqfH9us2nT7381dpYQUaiiXbaZAwqZbpEVGQ9oxyw3Bqsu_mbdyWdFVKlhcbNZE3lybJXXGoadma1fWTdzjtADUvTTZR2bbIySqQn8_qlyj5bYTzaC1DzmOHoWGJkRH_szQsA"
 ADMIN_VK_ID = 1118370233
 
+# --- ДОСТАВКА ---
+DELIVERY_TEST_MODE = True          # True — доставку видит только DELIVERY_TEST_USER
+DELIVERY_TEST_USER = 72534661      # VK ID для теста доставки (ivshiin)
+DELIVERY_POINT = "Ленина 36/2"     # с какой точки готовят доставку
+DELIVERY_MIN_ORDER = 500           # минимальная сумма заказа на доставку (только товары), ₽
+DELIVERY_OPEN_H = 12               # доставка работает с 12:00
+DELIVERY_CLOSE_H = 25              # до 01:00 следующего дня (24 + 1)
+DELIVERY_ZONES = {
+    "Чайковский": 200,
+    "п. Новый": 350,
+    "Фоки": 350,
+}
+
 MANAGERS = {
     "Ленина 36/2": 1118370233,
     "Декабристов 4а": 1118370233,
@@ -235,6 +248,8 @@ def get_state(user_id):
                 "items": [],  # list of dicts: {name, price, sauce, extras}
                 "point": None,
                 "pickup_time": None,
+                "order_type": "pickup",   # pickup | delivery
+                "delivery": None,          # {zone, price, street, house, apt}
             },
             "current_item": None,  # item being configured right now
         }
@@ -248,6 +263,8 @@ def reset_state(user_id):
             "items": [],
             "point": None,
             "pickup_time": None,
+            "order_type": "pickup",
+            "delivery": None,
         },
         "current_item": None,
     }
@@ -260,6 +277,16 @@ def is_point_open(point):
     if close_h <= 24:
         return open_h <= h < close_h
     # Переход через полночь: открыто с open_h до 24:00 ИЛИ с 00:00 до (close_h - 24)
+    return h >= open_h or h < (close_h - 24)
+
+
+def is_delivery_open():
+    """Доставка работает 12:00–01:00 (через полночь)"""
+    now = datetime.datetime.now(TZ)
+    h = now.hour + now.minute / 60
+    open_h, close_h = DELIVERY_OPEN_H, DELIVERY_CLOSE_H
+    if close_h <= 24:
+        return open_h <= h < close_h
     return h >= open_h or h < (close_h - 24)
 
 
@@ -312,15 +339,34 @@ def format_cart(order):
             price += extras_total
         lines.append(line)
         total += price
-    return "\n".join(lines) + f"\n\n  Итого: {total}₽"
+    goods_total = total
+    result = "\n".join(lines)
+    # Стоимость доставки
+    if order.get("order_type") == "delivery" and order.get("delivery"):
+        dprice = order["delivery"].get("price", 0)
+        result += f"\n\n  Товары: {goods_total}₽"
+        result += f"\n  Доставка: {dprice}₽"
+        result += f"\n\n  Итого: {goods_total + dprice}₽"
+    else:
+        result += f"\n\n  Итого: {goods_total}₽"
+    return result
 
 
-def get_total(order):
+def get_goods_total(order):
+    """Сумма только за товары, без доставки"""
     total = 0
     for item in order["items"]:
         total += item["price"]
         for e in item.get("extras", []):
             total += EXTRAS.get(e, 42)
+    return total
+
+
+def get_total(order):
+    """Полная сумма с доставкой"""
+    total = get_goods_total(order)
+    if order.get("order_type") == "delivery" and order.get("delivery"):
+        total += order["delivery"].get("price", 0)
     return total
 
 
@@ -334,6 +380,41 @@ def kb_main():
     kb.add_button("ℹ️ О нас", color=VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("💬 Обратная связь", color=VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
+def kb_order_type(user_id):
+    """Выбор: самовывоз или доставка (доставка в тесте только для тест-юзера)"""
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("🏃 Самовывоз", color=VkKeyboardColor.POSITIVE)
+    if not DELIVERY_TEST_MODE or user_id == DELIVERY_TEST_USER:
+        kb.add_line()
+        kb.add_button("🚗 Доставка", color=VkKeyboardColor.PRIMARY)
+    kb.add_line()
+    kb.add_button("◀️ Назад", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
+
+
+def kb_delivery_zones():
+    kb = VkKeyboard(one_time=True)
+    for zone, price in DELIVERY_ZONES.items():
+        kb.add_button(f"{zone} — {price}₽", color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+    kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
+
+
+def kb_apt_skip():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Без квартиры", color=VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
+def kb_delivery_time():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("⚡ Побыстрее (~60 мин)", color=VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("🕒 К определённому времени", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
 
@@ -472,32 +553,110 @@ def send(vk, user_id, text, keyboard=None):
     return False
 
 
+def start_checkout(vk, user_id, state):
+    """Общий переход к оформлению: проверки и выбор времени.
+    Возвращает True если перешли дальше."""
+    order = state["order"]
+    if not order["items"]:
+        send(vk, user_id, "Корзина пуста! Добавь хотя бы одну позицию 😊", kb_categories())
+        return
+
+    # Доставка — проверка минимальной суммы (только товары, без доставки)
+    if order.get("order_type") == "delivery":
+        goods = get_goods_total(order)
+        if goods < DELIVERY_MIN_ORDER:
+            need = DELIVERY_MIN_ORDER - goods
+            send(vk, user_id,
+                f"🛒 Минимальная сумма заказа на доставку — {DELIVERY_MIN_ORDER}₽.\n"
+                f"Сейчас на {goods}₽, добавь ещё на {need}₽ 😊",
+                kb_categories())
+            return
+        # Выбор режима времени доставки
+        state["step"] = "delivery_time_mode"
+        send(vk, user_id,
+            "🕒 Когда доставить?\n\n"
+            "⚡ Побыстрее — в течение ~60 минут (зависит от загруженности)\n"
+            "🕒 К определённому времени — не раньше чем через 90 минут",
+            kb_delivery_time())
+        return
+
+    # Самовывоз — как раньше
+    has_shashlik = any("Шашлык" in i["name"] for i in order["items"])
+    min_min = 30 if has_shashlik else 15
+    slots = get_time_slots(order["point"], min_minutes=min_min)
+    if not slots:
+        send(vk, user_id, "😔 Точка скоро закрывается, не успеем приготовить.\nПриходи завтра!", kb_main())
+        reset_state(user_id)
+        return
+    state["step"] = "choose_time"
+    order["min_minutes"] = min_min
+    hint = "⏰ На какое время готовить?\n\nВыбери из списка или напиши своё время в формате ЧЧ:ММ (например 14:30)"
+    if has_shashlik:
+        hint += "\n\n🔥 Шашлык готовится 30 минут — учли это в слотах"
+    send(vk, user_id, hint, kb_time(slots))
+
+
 def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, payment_status):
     """Финализирует заказ — уведомляет менеджера и клиента"""
+    is_delivery = order.get("order_type") == "delivery"
     manager_id = MANAGERS.get(order["point"], ADMIN_VK_ID)
-    notif = (
-        f"🆕 НОВЫЙ ЗАКАЗ #{order_num}\n\n"
-        f"👤 {user_name} (vk.com/id{user_id})\n"
-        f"📱 {order.get('phone', 'не указан')}\n"
-        f"📍 {order['point']}\n"
-        f"⏰ Готовность: {order['pickup_time']}\n\n"
-        f"{cart}\n\n"
-        f"💰 Сумма: {total}₽\n"
-        f"💳 {payment_status}"
-    )
+
+    if is_delivery:
+        d = order["delivery"]
+        addr = f"{d['street']}, д. {d['house']}"
+        if d.get("apt"):
+            addr += f", кв. {d['apt']}"
+        notif = (
+            f"🚗 НОВЫЙ ЗАКАЗ #{order_num} — ДОСТАВКА\n\n"
+            f"👤 {user_name} (vk.com/id{user_id})\n"
+            f"📱 {order.get('phone', 'не указан')}\n"
+            f"🚗 Зона: {d['zone']}\n"
+            f"🏠 Адрес: {addr}\n"
+            f"🍳 Готовит: {order['point']}\n"
+            f"🕒 Время: {order['pickup_time']}\n\n"
+            f"{cart}\n\n"
+            f"💰 Итого с доставкой: {total}₽\n"
+            f"💳 {payment_status}"
+        )
+    else:
+        notif = (
+            f"🆕 НОВЫЙ ЗАКАЗ #{order_num}\n\n"
+            f"👤 {user_name} (vk.com/id{user_id})\n"
+            f"📱 {order.get('phone', 'не указан')}\n"
+            f"📍 {order['point']}\n"
+            f"⏰ Готовность: {order['pickup_time']}\n\n"
+            f"{cart}\n\n"
+            f"💰 Сумма: {total}₽\n"
+            f"💳 {payment_status}"
+        )
     try:
         vk.messages.send(user_id=manager_id, message=notif, random_id=0)
     except Exception as e:
         print(f"Ошибка уведомления: {e}")
 
-    send(vk, user_id,
-        f"🎉 Заказ #{order_num} принят!\n\n"
-        f"📍 {order['point']}\n"
-        f"⏰ Будет готов к {order['pickup_time']}\n"
-        f"💰 Сумма: {total}₽\n"
-        f"💳 {payment_status}\n\n"
-        f"Ждём тебя, {first_name}! До встречи 🌯🔥",
-        kb_main())
+    if is_delivery:
+        d = order["delivery"]
+        addr = f"{d['street']}, д. {d['house']}"
+        if d.get("apt"):
+            addr += f", кв. {d['apt']}"
+        send(vk, user_id,
+            f"🎉 Заказ #{order_num} принят!\n\n"
+            f"🚗 Доставка: {d['zone']}\n"
+            f"🏠 {addr}\n"
+            f"🕒 {order['pickup_time']}\n"
+            f"💰 Итого с доставкой: {total}₽\n"
+            f"💳 {payment_status}\n\n"
+            f"Спасибо, {first_name}! Уже готовим 🌯🔥",
+            kb_main())
+    else:
+        send(vk, user_id,
+            f"🎉 Заказ #{order_num} принят!\n\n"
+            f"📍 {order['point']}\n"
+            f"⏰ Будет готов к {order['pickup_time']}\n"
+            f"💰 Сумма: {total}₽\n"
+            f"💳 {payment_status}\n\n"
+            f"Ждём тебя, {first_name}! До встречи 🌯🔥",
+            kb_main())
 
 
 def safe_listen(vk_session):
@@ -625,12 +784,108 @@ def main():
                 kb_main())
             continue
 
-        # НАЧАЛО ЗАКАЗА
+        # НАЧАЛО ЗАКАЗА — выбор типа
         if text == "🌯 Сделать предзаказ":
-            state["step"] = "choose_point"
+            state["step"] = "choose_order_type"
             send(vk, user_id,
-                "📍 Выбери точку самовывоза:\n\n✅ — открыто  ❌ — закрыто",
-                kb_points())
+                "Как хочешь получить заказ? 👇",
+                kb_order_type(user_id))
+            continue
+
+        # ВЫБОР ТИПА: самовывоз / доставка
+        if step == "choose_order_type":
+            if text == "🏃 Самовывоз":
+                state["order"]["order_type"] = "pickup"
+                state["step"] = "choose_point"
+                send(vk, user_id,
+                    "📍 Выбери точку самовывоза:\n\n✅ — открыто  ❌ — закрыто",
+                    kb_points())
+                continue
+            if text == "🚗 Доставка" and (not DELIVERY_TEST_MODE or user_id == DELIVERY_TEST_USER):
+                # Доставка работает 12:00–01:00
+                if not is_delivery_open():
+                    send(vk, user_id,
+                        "😔 Доставка работает с 12:00 до 01:00.\nСейчас недоступна — попробуй позже или закажи самовывоз.",
+                        kb_order_type(user_id))
+                    continue
+                state["order"]["order_type"] = "delivery"
+                state["order"]["point"] = DELIVERY_POINT
+                state["step"] = "delivery_zone"
+                zones_txt = "\n".join(f"• {z} — {p}₽" for z, p in DELIVERY_ZONES.items())
+                send(vk, user_id,
+                    f"🚗 Доставка по зонам:\n{zones_txt}\n\n"
+                    f"Минимальная сумма заказа — {DELIVERY_MIN_ORDER}₽\n\n"
+                    f"Куда везём? Выбери зону 👇",
+                    kb_delivery_zones())
+                continue
+            if text == "◀️ Назад":
+                reset_state(user_id)
+                send(vk, user_id, "Главное меню 👇", kb_main())
+                continue
+            send(vk, user_id, "Выбери способ получения 👇", kb_order_type(user_id))
+            continue
+
+        # ДОСТАВКА: выбор зоны
+        if step == "delivery_zone":
+            matched_zone = None
+            for zone, price in DELIVERY_ZONES.items():
+                if text.startswith(zone) or zone in text:
+                    matched_zone = (zone, price)
+                    break
+            if matched_zone:
+                state["order"]["delivery"] = {
+                    "zone": matched_zone[0],
+                    "price": matched_zone[1],
+                    "street": None, "house": None, "apt": None,
+                }
+                state["step"] = "delivery_street"
+                send(vk, user_id, "🏠 Напиши улицу:", None)
+            else:
+                send(vk, user_id, "Выбери зону из списка 👇", kb_delivery_zones())
+            continue
+
+        # ДОСТАВКА: улица
+        if step == "delivery_street":
+            street = text.strip()
+            if len(street) < 2:
+                send(vk, user_id, "Напиши название улицы 👇", None)
+                continue
+            state["order"]["delivery"]["street"] = street
+            state["step"] = "delivery_house"
+            send(vk, user_id, "🔢 Номер дома:", None)
+            continue
+
+        # ДОСТАВКА: дом
+        if step == "delivery_house":
+            house = text.strip()
+            if len(house) < 1:
+                send(vk, user_id, "Напиши номер дома 👇", None)
+                continue
+            state["order"]["delivery"]["house"] = house
+            state["step"] = "delivery_apt"
+            send(vk, user_id,
+                "🚪 Номер квартиры (если есть)\n\nИли нажми «Без квартиры»:",
+                kb_apt_skip())
+            continue
+
+        # ДОСТАВКА: квартира
+        if step == "delivery_apt":
+            if text == "Без квартиры":
+                state["order"]["delivery"]["apt"] = None
+            else:
+                state["order"]["delivery"]["apt"] = text.strip()
+            # Переходим к выбору категории (меню)
+            state["step"] = "choose_category"
+            d = state["order"]["delivery"]
+            addr = f"{d['street']}, д. {d['house']}"
+            if d.get("apt"):
+                addr += f", кв. {d['apt']}"
+            send(vk, user_id,
+                f"✅ Адрес: {addr}\n"
+                f"🚗 Зона: {d['zone']} (+{d['price']}₽)\n\n"
+                f"Теперь собери заказ. Минимум на доставку — {DELIVERY_MIN_ORDER}₽.\n\n"
+                f"Выбери категорию:",
+                kb_categories())
             continue
 
         # ВЫБОР ТОЧКИ
@@ -672,25 +927,7 @@ def main():
         # ВЫБОР КАТЕГОРИИ
         if step == "choose_category":
             if text == "🛒 Оформить заказ":
-                if not state["order"]["items"]:
-                    send(vk, user_id, "Корзина пуста! Добавь хотя бы одну позицию 😊", kb_categories())
-                else:
-                    # Считаем мин время
-                    has_shashlik = any("Шашлык" in i["name"] for i in state["order"]["items"])
-                    min_min = 30 if has_shashlik else 15
-                    slots = get_time_slots(state["order"]["point"], min_minutes=min_min)
-                    if not slots:
-                        send(vk, user_id,
-                            "😔 Точка скоро закрывается, не успеем приготовить.\nПриходи завтра!",
-                            kb_main())
-                        reset_state(user_id)
-                    else:
-                        state["step"] = "choose_time"
-                        state["order"]["min_minutes"] = min_min
-                        hint = "⏰ На какое время готовить?\n\nВыбери из списка или напиши своё время в формате ЧЧ:ММ (например 14:30)"
-                        if has_shashlik:
-                            hint += "\n\n🔥 Шашлык готовится 30 минут — учли это в слотах"
-                        send(vk, user_id, hint, kb_time(slots))
+                start_checkout(vk, user_id, state)
                 continue
 
             matched_cat = None
@@ -816,22 +1053,66 @@ def main():
             continue
 
         if step == "choose_category" and text == "🛒 Оформить заказ":
-            if not state["order"]["items"]:
-                send(vk, user_id, "Корзина пуста!", kb_categories())
+            start_checkout(vk, user_id, state)
+            continue
+
+        # ДОСТАВКА: режим времени
+        if step == "delivery_time_mode":
+            if text == "⚡ Побыстрее (~60 мин)":
+                state["order"]["pickup_time"] = "Побыстрее (~60 мин)"
+                state["order"]["delivery_asap"] = True
+                state["step"] = "enter_phone"
+                send(vk, user_id,
+                    "📱 Укажи номер телефона для связи\n\nНапиши в формате: 89991234567")
+                continue
+            if text == "🕒 К определённому времени":
+                state["step"] = "delivery_time_custom"
+                now = datetime.datetime.now(TZ)
+                earliest = (now + datetime.timedelta(minutes=90)).strftime("%H:%M")
+                send(vk, user_id,
+                    f"🕒 Напиши желаемое время в формате ЧЧ:ММ\n\n"
+                    f"Не раньше чем {earliest} (через 90 минут)", None)
+                continue
+            send(vk, user_id, "Выбери вариант 👇", kb_delivery_time())
+            continue
+
+        # ДОСТАВКА: ввод точного времени
+        if step == "delivery_time_custom":
+            if len(text) == 5 and ":" in text:
+                try:
+                    now = datetime.datetime.now(TZ)
+                    h, m = map(int, text.split(":"))
+                    if not (0 <= h <= 23 and 0 <= m <= 59):
+                        raise ValueError
+                    input_dt = datetime.datetime.combine(now.date(), datetime.time(h, m), tzinfo=TZ)
+                    if input_dt < now:
+                        input_dt += datetime.timedelta(days=1)
+                    min_time = now + datetime.timedelta(minutes=90)
+                    # Проверка что доставка работает в это время (12:00–01:00)
+                    open_h, close_h = DELIVERY_OPEN_H, DELIVERY_CLOSE_H
+                    hh = input_dt.hour + input_dt.minute / 60
+                    if close_h <= 24:
+                        delivery_ok = open_h <= hh < close_h
+                    else:
+                        delivery_ok = hh >= open_h or hh < (close_h - 24)
+
+                    if input_dt < min_time:
+                        send(vk, user_id,
+                            f"⚠️ Слишком рано! Доставка не раньше чем через 90 минут "
+                            f"(с {min_time.strftime('%H:%M')}). Напиши другое время:", None)
+                    elif not delivery_ok:
+                        send(vk, user_id,
+                            "⚠️ Доставка работает с 12:00 до 01:00. Выбери время в этом окне:", None)
+                    else:
+                        state["order"]["pickup_time"] = text
+                        state["order"]["delivery_asap"] = False
+                        state["step"] = "enter_phone"
+                        send(vk, user_id,
+                            "📱 Укажи номер телефона для связи\n\nНапиши в формате: 89991234567")
+                except:
+                    send(vk, user_id, "⚠️ Неверный формат. Напиши как 19:30:", None)
             else:
-                has_shashlik = any("Шашлык" in i["name"] for i in state["order"]["items"])
-                min_min = 30 if has_shashlik else 15
-                slots = get_time_slots(state["order"]["point"], min_minutes=min_min)
-                if not slots:
-                    send(vk, user_id, "😔 Точка скоро закрывается.\nПриходи завтра!", kb_main())
-                    reset_state(user_id)
-                else:
-                    state["step"] = "choose_time"
-                    state["order"]["min_minutes"] = min_min
-                    hint = "⏰ На какое время готовить?\n\nВыбери из списка или напиши своё время в формате ЧЧ:ММ"
-                    if has_shashlik:
-                        hint += "\n\n🔥 Шашлык готовится 30 минут — учли это в слотах"
-                    send(vk, user_id, hint, kb_time(slots))
+                send(vk, user_id, "⚠️ Напиши время в формате ЧЧ:ММ (например 19:30):", None)
             continue
 
         # ВРЕМЯ
@@ -903,16 +1184,31 @@ def main():
             if phone.startswith("8") and len(phone) == 11 and phone.isdigit():
                 state["order"]["phone"] = phone
                 state["step"] = "confirm"
-                cart = format_cart(state["order"])
-                total = get_total(state["order"])
-                summary = (
-                    f"📋 Твой заказ:\n\n"
-                    f"📍 {state['order']['point']}\n"
-                    f"⏰ Время готовности: {state['order']['pickup_time']}\n"
-                    f"📱 Телефон: {phone}\n\n"
-                    f"{cart}\n\n"
-                    f"Всё верно? 👇"
-                )
+                order = state["order"]
+                cart = format_cart(order)
+                if order.get("order_type") == "delivery":
+                    d = order["delivery"]
+                    addr = f"{d['street']}, д. {d['house']}"
+                    if d.get("apt"):
+                        addr += f", кв. {d['apt']}"
+                    summary = (
+                        f"📋 Твой заказ:\n\n"
+                        f"🚗 Доставка: {d['zone']}\n"
+                        f"🏠 Адрес: {addr}\n"
+                        f"🕒 Время: {order['pickup_time']}\n"
+                        f"📱 Телефон: {phone}\n\n"
+                        f"{cart}\n\n"
+                        f"Всё верно? 👇"
+                    )
+                else:
+                    summary = (
+                        f"📋 Твой заказ:\n\n"
+                        f"📍 {order['point']}\n"
+                        f"⏰ Время готовности: {order['pickup_time']}\n"
+                        f"📱 Телефон: {phone}\n\n"
+                        f"{cart}\n\n"
+                        f"Всё верно? 👇"
+                    )
                 send(vk, user_id, summary, kb_confirm())
             else:
                 send(vk, user_id,
@@ -935,7 +1231,12 @@ def main():
                 kb = VkKeyboard(one_time=True)
                 kb.add_button("💳 Оплатить онлайн", color=VkKeyboardColor.POSITIVE)
                 kb.add_line()
-                kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
+                if order.get("order_type") == "delivery":
+                    kb.add_button("💳 Картой курьеру", color=VkKeyboardColor.SECONDARY)
+                    kb.add_line()
+                    kb.add_button("💵 Наличными", color=VkKeyboardColor.SECONDARY)
+                else:
+                    kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
                 send(vk, user_id,
                     f"✅ Заказ #{order_counter} оформлен!\n\n"
                     f"💰 Сумма: {total}₽\n\n"
@@ -957,7 +1258,10 @@ def main():
             cart = format_cart(order)
 
             if text == "💳 Оплатить онлайн":
-                description = f"Заказ #{order_num} Eat to End — {order['point']}"
+                if order.get("order_type") == "delivery":
+                    description = f"Заказ #{order_num} Eat to End — доставка {order['delivery']['zone']}"
+                else:
+                    description = f"Заказ #{order_num} Eat to End — {order['point']}"
                 # Выбираем ключи в зависимости от точки
                 phone = order.get("phone", "")
                 items = order.get("items", [])
@@ -1013,6 +1317,16 @@ def main():
 
             if text == "💵 Оплата при получении":
                 _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Оплата при получении")
+                reset_state(user_id)
+                continue
+
+            if text == "💳 Картой курьеру":
+                _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Картой курьеру")
+                reset_state(user_id)
+                continue
+
+            if text == "💵 Наличными":
+                _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Наличными курьеру")
                 reset_state(user_id)
                 continue
 
