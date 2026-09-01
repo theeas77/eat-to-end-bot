@@ -374,12 +374,19 @@ FEEDBACK_URL = "https://vk.com/app6013442_-232479429?form_id=1#form_id=1"
 
 def kb_main():
     kb = VkKeyboard(one_time=False)
-    kb.add_button("🌯 Сделать предзаказ", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("🌯 Сделать заказ", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("📍 Наши точки", color=VkKeyboardColor.SECONDARY)
     kb.add_button("ℹ️ О нас", color=VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("💬 Обратная связь", color=VkKeyboardColor.SECONDARY)
+    return kb.get_keyboard()
+
+
+def kb_final():
+    """Клавиатура после оформления заказа"""
+    kb = VkKeyboard(one_time=False)
+    kb.add_button("🏠 Вернуться в начало", color=VkKeyboardColor.PRIMARY)
     return kb.get_keyboard()
 
 
@@ -647,7 +654,7 @@ def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, 
             f"💰 Итого с доставкой: {total}₽\n"
             f"💳 {payment_status}\n\n"
             f"Спасибо, {first_name}! Уже готовим 🌯🔥",
-            kb_main())
+            kb_final())
     else:
         send(vk, user_id,
             f"🎉 Заказ #{order_num} принят!\n\n"
@@ -656,7 +663,7 @@ def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, 
             f"💰 Сумма: {total}₽\n"
             f"💳 {payment_status}\n\n"
             f"Ждём тебя, {first_name}! До встречи 🌯🔥",
-            kb_main())
+            kb_final())
 
 
 def safe_listen(vk_session):
@@ -741,14 +748,14 @@ def main():
             first_name = "Друг"
 
         # СТАРТ
-        if text.lower() in ["начать", "start", "/start", "❌ отмена", "🔄 начать заново", "◀️ назад"]:
+        if text.lower() in ["начать", "start", "/start", "❌ отмена", "🔄 начать заново", "◀️ назад", "🏠 вернуться в начало"]:
             reset_state(user_id)
             send(vk, user_id,
                 f"Привет, {first_name}! 👋\n\n"
                 f"Добро пожаловать в Eat to End — шаурма из шашлыка 🌯🔥\n\n"
                 f"🆕 Новость! Открылась новая точка на Декабристов 4а — заходи!\n\n"
                 f"Твой быстрый перекус в удобном месте.\n"
-                f"Оформи предзаказ и забери готовое без очереди!",
+                f"Оформи заказ и забери готовое без очереди!",
                 kb_main())
             continue
 
@@ -785,7 +792,7 @@ def main():
             continue
 
         # НАЧАЛО ЗАКАЗА — выбор типа
-        if text == "🌯 Сделать предзаказ":
+        if text == "🌯 Сделать заказ":
             state["step"] = "choose_order_type"
             send(vk, user_id,
                 "Как хочешь получить заказ? 👇",
