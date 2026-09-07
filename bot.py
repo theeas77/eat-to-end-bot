@@ -166,6 +166,17 @@ def save_customer(user_id, order):
     _save_json(CUSTOMERS_FILE, customers)
 
 
+def save_delivery_address(user_id, delivery):
+    """Сохраняет адрес сразу после его ввода, даже если заказ ещё не оформлен."""
+    if not delivery:
+        return
+    if not delivery.get("street") or not delivery.get("house") or not delivery.get("zone"):
+        return
+    c = get_customer(user_id)
+    c["delivery"] = {k: delivery.get(k) for k in ("zone", "price", "street", "house", "apt", "domofon")}
+    _save_json(CUSTOMERS_FILE, customers)
+
+
 def save_active_order(order_num, user_id, order, manager_id):
     active_orders[str(order_num)] = {
         "user_id": user_id,
@@ -730,12 +741,23 @@ def kb_manager_status(order_num, is_delivery):
 
 
 def request_phone(vk, user_id, state):
-    saved = get_customer(user_id).get("phone")
+    customer = get_customer(user_id)
+    saved = customer.get("phone")
+
+    # Если отдельное поле телефона ещё пустое, пробуем восстановить его
+    # из последнего оформленного заказа (полезно после обновления старой версии бота).
+    if not saved and customer.get("last_order"):
+        saved = customer["last_order"].get("phone")
+        if saved:
+            customer["phone"] = saved
+            _save_json(CUSTOMERS_FILE, customers)
+
     if saved:
         state["step"] = "confirm_saved_phone"
         send(vk, user_id, f"📱 Использовать сохранённый номер {saved}?", kb_saved_phone())
     else:
         state["step"] = "enter_phone"
+        send(vk, user_id, "📱 Укажи номер телефона для связи\n\nНапиши в формате: 89991234567")
         send(vk, user_id, "📱 Укажи номер телефона для связи\n\nНапиши в формате: 89991234567")
 
 
@@ -795,6 +817,28 @@ def start_checkout(vk, user_id, state):
     order = state["order"]
     if not order["items"]:
         send(vk, user_id, "Корзина пуста! Добавь хотя бы одну позицию 😊", kb_categories(state["order"].get("order_type","pickup")))
+        return
+
+    # Если клиент нажал «Повторить заказ» -> «Изменить заказ»,
+    # перед дальнейшим оформлением доставки обязательно заново уточняем адрес.
+    if order.get("order_type") == "delivery" and state.get("repeat_needs_address_confirm"):
+        saved_d = order.get("delivery") or get_customer(user_id).get("delivery")
+        if saved_d:
+            state["order"]["delivery"] = dict(saved_d)
+            state["step"] = "repeat_confirm_address"
+            addr = f"{saved_d.get('street')}, д. {saved_d.get('house')}"
+            if saved_d.get("apt"):
+                addr += f", кв. {saved_d.get('apt')}"
+            send(vk, user_id,
+                 f"🚗 Куда доставить заказ?\n\n"
+                 f"🏠 Прошлый адрес: {addr}\n"
+                 f"Зона: {saved_d.get('zone')}\n\n"
+                 f"Подтверди адрес или выбери другой 👇",
+                 kb_saved_address())
+        else:
+            state["repeat_needs_address_confirm"] = False
+            state["step"] = "delivery_zone"
+            send(vk, user_id, "🚗 Уточним адрес доставки. Выбери зону 👇", kb_delivery_zones())
         return
 
     # Ненавязчивый upsell: сначала одна популярная добавка, затем напиток.
@@ -1239,7 +1283,14 @@ def main():
             state = get_state(user_id)
             state["order"]["order_type"] = "delivery"
             state["order"]["point"] = DELIVERY_POINT
-            saved_d = get_customer(user_id).get("delivery")
+            customer = get_customer(user_id)
+            saved_d = customer.get("delivery")
+            # На всякий случай берём адрес и из прошлого заказа, если отдельное поле ещё не было сохранено.
+            if not saved_d and customer.get("last_order"):
+                saved_d = customer["last_order"].get("delivery")
+                if saved_d:
+                    customer["delivery"] = dict(saved_d)
+                    _save_json(CUSTOMERS_FILE, customers)
             if saved_d:
                 state["step"] = "confirm_saved_address"
                 addr = f"{saved_d.get('street')}, д. {saved_d.get('house')}"
@@ -1292,6 +1343,10 @@ def main():
                     state["upsell_drink_shown"] = True
                     start_checkout(vk, user_id, state)
             elif text == "✏️ Изменить заказ":
+                # Состав можно менять, но адрес доставки после изменений
+                # обязательно уточним ещё раз перед оформлением.
+                if state["order"].get("order_type") == "delivery":
+                    state["repeat_needs_address_confirm"] = True
                 state["step"] = "cart_edit"
                 send(vk, user_id, "🛒 Измени заказ 👇\n\n" + format_cart(state["order"]), kb_cart(state["order"]))
             else:
@@ -1301,13 +1356,15 @@ def main():
         # ПОВТОР ДОСТАВКИ: подтверждение адреса
         if step == "repeat_confirm_address":
             if text == "✅ Да, сюда":
+                # Адрес подтверждён — больше повторно его не спрашиваем.
+                state["repeat_needs_address_confirm"] = False
                 # Состав заказа уже загружен из прошлого заказа.
                 # После подтверждения адреса продолжаем оформление.
-                state["upsell_extras_shown"] = True
-                state["upsell_drink_shown"] = True
                 start_checkout(vk, user_id, state)
             elif text == "✏️ Другой адрес":
-                # Сохраняем товары, меняем только адрес доставки.
+                # Клиент явно выбрал ввод нового адреса, поэтому старый
+                # больше подтверждать не нужно — ведём по полному сценарию адреса.
+                state["repeat_needs_address_confirm"] = False
                 state["order"]["delivery"] = None
                 state["step"] = "delivery_zone"
                 zones_txt = "\n".join(f"• {z} — {p}₽" for z, p in DELIVERY_ZONES.items())
@@ -1458,6 +1515,7 @@ def main():
                 # Без квартиры домофон не спрашиваем — сразу в меню
                 state["step"] = "choose_category"
                 d = state["order"]["delivery"]
+                save_delivery_address(user_id, d)
                 addr = f"{d['street']}, д. {d['house']}"
                 send(vk, user_id,
                     f"✅ Адрес: {addr}\n"
@@ -1482,6 +1540,7 @@ def main():
                 continue
             state["step"] = "choose_category"
             d = state["order"]["delivery"]
+            save_delivery_address(user_id, d)
             addr = f"{d['street']}, д. {d['house']}, кв. {d['apt']}"
             send(vk, user_id,
                 f"✅ Адрес: {addr}\n"
@@ -1825,8 +1884,20 @@ def main():
         # ТЕЛЕФОН
         if step == "enter_phone":
             phone = text.strip().replace(" ", "").replace("-", "").replace("+", "")
+            # Принимаем и 8XXXXXXXXXX, и +7XXXXXXXXXX / 7XXXXXXXXXX.
+            if phone.startswith("7") and len(phone) == 11 and phone.isdigit():
+                phone = "8" + phone[1:]
+
             if phone.startswith("8") and len(phone) == 11 and phone.isdigit():
                 state["order"]["phone"] = phone
+
+                # Сохраняем сразу после корректного ввода, а не только после
+                # полного завершения заказа. Поэтому при следующей доставке
+                # бот уже предложит использовать этот номер.
+                customer = get_customer(user_id)
+                customer["phone"] = phone
+                _save_json(CUSTOMERS_FILE, customers)
+
                 state["step"] = "confirm"
                 order = state["order"]
                 cart = format_cart(order)
