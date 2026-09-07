@@ -37,7 +37,7 @@ ADMIN_VK_ID = 1118370233
 
 # --- ДОСТАВКА ---
 DELIVERY_TEST_MODE = False         # False — доставка доступна всем
-DELIVERY_TIME_LIMITS_ENABLED = False  # ТЕСТ: False = доставка доступна круглосуточно и без ограничения +90 мин
+DELIVERY_TIME_LIMITS_ENABLED = True  # Рабочий режим: доставка 12:00–01:00, заказ к времени — не раньше чем через 90 мин
 DELIVERY_TEST_USER = 72534661      # VK ID для теста доставки (ivshiin)
 DELIVERY_POINT = "Ленина 36/2"     # с какой точки готовят доставку
 DELIVERY_MIN_ORDER = 500           # минимальная сумма заказа на доставку (только товары), ₽
