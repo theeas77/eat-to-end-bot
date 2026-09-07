@@ -11,9 +11,18 @@ import requests
 from zoneinfo import ZoneInfo
 
 TZ = ZoneInfo("Asia/Yekaterinburg")  # UTC+5 Пермь
-COUNTER_FILE = "order_counter.json"
-CUSTOMERS_FILE = "customers.json"
-ACTIVE_ORDERS_FILE = "active_orders.json"
+
+# --- ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ---
+# Все пользовательские данные лежат в одном стабильном каталоге рядом с ботом.
+# Если хостинг предоставляет постоянный диск/volume, можно задать путь через
+# переменную окружения BOT_DATA_DIR, например: /data/eat_to_end_bot
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.environ.get("BOT_DATA_DIR", os.path.join(BASE_DIR, "bot_data"))
+os.makedirs(DATA_DIR, exist_ok=True)
+
+COUNTER_FILE = os.path.join(DATA_DIR, "order_counter.json")
+CUSTOMERS_FILE = os.path.join(DATA_DIR, "customers.json")
+ACTIVE_ORDERS_FILE = os.path.join(DATA_DIR, "active_orders.json")
 
 # ЮКасса для Ленина и Промышленная
 YUKASSA_SHOP_ID = "1378878"
@@ -133,9 +142,15 @@ def _load_json(path, default):
 
 
 def _save_json(path, data):
+    """Атомарно сохраняет JSON, чтобы файл не повредился при перезапуске."""
     try:
-        with open(path, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
     except Exception as e:
         print(f"Ошибка записи {path}: {e}")
 
@@ -1127,6 +1142,8 @@ def main():
     threading.Thread(target=payment_watcher, args=(vk,), daemon=True).start()
     threading.Thread(target=abandoned_order_watcher, args=(vk,), daemon=True).start()
     print("Бот запущен!")
+    print(f"Данные клиентов: {CUSTOMERS_FILE}")
+    print(f"Активные заказы: {ACTIVE_ORDERS_FILE}")
 
     for event in safe_listen(vk_session):
         if not (event.type == VkEventType.MESSAGE_NEW and event.to_me and not event.from_me):
