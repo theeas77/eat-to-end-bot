@@ -118,6 +118,11 @@ user_states = {}
 processed_msgs = {}
 pending_payments = {}  # payment_id -> данные заказа, ждущего оплаты
 
+# --- НАПОМИНАНИЕ О НЕЗАВЕРШЁННОМ ЗАКАЗЕ ---
+ABANDONED_FIRST_TIMEOUT = 5 * 60     # первое напоминание через 5 минут бездействия
+ABANDONED_SECOND_TIMEOUT = 30 * 60   # второе напоминание через 30 минут бездействия
+ABANDONED_CHECK_INTERVAL = 30        # проверяем раз в 30 секунд
+
 
 def load_counter():
     """Загружает счётчик из файла"""
@@ -254,6 +259,8 @@ def get_state(user_id):
                 "delivery": None,          # {zone, price, street, house, apt}
             },
             "current_item": None,  # item being configured right now
+            "last_activity": time.time(),
+            "abandon_reminder_stage": 0,
         }
     return user_states[user_id]
 
@@ -269,6 +276,8 @@ def reset_state(user_id):
             "delivery": None,
         },
         "current_item": None,
+        "last_activity": time.time(),
+        "abandon_reminder_stage": 0,
     }
 
 
@@ -498,10 +507,19 @@ def kb_categories(order_type="pickup"):
 def kb_items(category):
     kb = VkKeyboard(one_time=True)
     items = list(MENU[category].items())
+
+    # В длинных категориях показываем по одной позиции на строку,
+    # чтобы название и цена полностью помещались на кнопке.
+    one_per_row = category in {"Шаурма и сэндвичи", "Шашлык"}
+
     for i, (name, price) in enumerate(items):
         kb.add_button(f"{name} {price}₽", color=VkKeyboardColor.SECONDARY)
-        if i % 2 == 1 and i != len(items) - 1:
+        if one_per_row:
+            if i != len(items) - 1:
+                kb.add_line()
+        elif i % 2 == 1 and i != len(items) - 1:
             kb.add_line()
+
     kb.add_line()
     kb.add_button("◀️ К категориям", color=VkKeyboardColor.SECONDARY)
     kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
@@ -744,6 +762,113 @@ def safe_listen(vk_session):
             time.sleep(wait)
 
 
+def _abandoned_keyboard(state):
+    """Возвращает клавиатуру для текущего шага, чтобы человек мог продолжить заказ."""
+    step = state.get("step", "main")
+    order = state.get("order", {})
+
+    if step == "choose_point":
+        return kb_points()
+    if step == "delivery_zone":
+        return kb_delivery_zones()
+    if step == "delivery_apt":
+        return kb_apt_skip()
+    if step == "delivery_domofon":
+        return kb_domofon()
+    if step == "choose_category":
+        return kb_categories(order.get("order_type", "pickup"))
+    if step == "choose_item":
+        cat = state.get("current_category")
+        return kb_items(cat) if cat in MENU else kb_categories(order.get("order_type", "pickup"))
+    if step == "choose_sauce_for_item":
+        return kb_sauces()
+    if step == "choose_extras_for_item":
+        return kb_extras_page2() if state.get("extras_page", 1) == 2 else kb_extras_page1()
+    if step == "delivery_time_mode":
+        return kb_delivery_time()
+    if step == "choose_time":
+        point = order.get("point")
+        if point:
+            return kb_time(get_time_slots(point, min_minutes=order.get("min_minutes", 15)))
+    if step == "confirm":
+        return kb_confirm()
+    if step == "choose_payment":
+        kb = VkKeyboard(one_time=True)
+        kb.add_button("💳 Оплатить онлайн", color=VkKeyboardColor.POSITIVE)
+        kb.add_line()
+        if order.get("order_type") == "delivery":
+            kb.add_button("💳 Картой курьеру", color=VkKeyboardColor.SECONDARY)
+            kb.add_line()
+            kb.add_button("💵 Наличными", color=VkKeyboardColor.SECONDARY)
+        else:
+            kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
+        return kb.get_keyboard()
+    if step == "wait_payment":
+        return kb_wait_payment(order)
+    if step == "delivery_change":
+        return kb_change()
+
+    # Для шагов, где нужно ввести текст (улица, дом, время, телефон),
+    # клавиатуру не показываем — человек просто отвечает сообщением.
+    return None
+
+
+def abandoned_order_watcher(vk):
+    """Напоминает о незавершённом заказе через 5 и 30 минут бездействия."""
+    while True:
+        time.sleep(ABANDONED_CHECK_INTERVAL)
+        now = time.time()
+
+        try:
+            for user_id, state in list(user_states.items()):
+                # Если заказ завершён/пользователь вернулся в главное меню — не напоминаем
+                if state.get("step", "main") == "main":
+                    continue
+
+                last_activity = state.get("last_activity", now)
+                inactive_for = now - last_activity
+                stage = state.get("abandon_reminder_stage", 0)
+                step = state.get("step")
+
+                # Подсказка зависит от того, где человек остановился
+                if step == "delivery_street":
+                    tail = "Напиши улицу — и продолжим 🚗"
+                elif step == "delivery_house":
+                    tail = "Осталось указать номер дома 👇"
+                elif step == "delivery_time_custom":
+                    tail = "Напиши желаемое время в формате ЧЧ:ММ 👇"
+                elif step == "enter_phone":
+                    tail = "Осталось указать номер телефона в формате 89991234567 👇"
+                elif step == "wait_payment":
+                    tail = "Если уже оплатил — нажми «Я оплатил». Можно также выбрать другой способ оплаты 👇"
+                else:
+                    tail = "Продолжи с того места, где остановился 👇"
+
+                # Второе напоминание — через 30 минут общей бездеятельности
+                if stage < 2 and inactive_for >= ABANDONED_SECOND_TIMEOUT:
+                    message = (
+                        "🌯 Твоя шаурма всё ещё ждёт тебя 😏\n\n"
+                        "Заказ так и не закончен, но мы всё сохранили.\n"
+                        f"{tail}"
+                    )
+                    if send(vk, user_id, message, _abandoned_keyboard(state)):
+                        state["abandon_reminder_stage"] = 2
+                    continue
+
+                # Первое напоминание — через 5 минут
+                if stage < 1 and inactive_for >= ABANDONED_FIRST_TIMEOUT:
+                    message = (
+                        "🌯 Кажется, ты не закончил заказ.\n\n"
+                        "Мы всё сохранили — можно продолжить прямо сейчас.\n"
+                        f"{tail}"
+                    )
+                    if send(vk, user_id, message, _abandoned_keyboard(state)):
+                        state["abandon_reminder_stage"] = 1
+
+        except Exception as e:
+            print(f"Ошибка в abandoned_order_watcher: {e}")
+
+
 def payment_watcher(vk):
     """Фоновая проверка оплат — раз в 15 секунд"""
     while True:
@@ -783,6 +908,7 @@ def main():
     vk = vk_session.get_api()
 
     threading.Thread(target=payment_watcher, args=(vk,), daemon=True).start()
+    threading.Thread(target=abandoned_order_watcher, args=(vk,), daemon=True).start()
     print("Бот запущен!")
 
     for event in safe_listen(vk_session):
@@ -803,6 +929,7 @@ def main():
             continue
 
         state = get_state(user_id)
+        state["last_activity"] = time.time()
         step = state["step"]
 
         try:
