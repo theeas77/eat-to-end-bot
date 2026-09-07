@@ -15,9 +15,9 @@ TZ = ZoneInfo("Asia/Yekaterinburg")  # UTC+5 Пермь
 # --- ПОСТОЯННОЕ ХРАНЕНИЕ ДАННЫХ ---
 # Все пользовательские данные лежат в одном стабильном каталоге рядом с ботом.
 # Если хостинг предоставляет постоянный диск/volume, можно задать путь через
-# переменную окружения BOT_DATA_DIR, например: /data/eat_to_end_bot
+# Railway Volume смонтирован в /data. При необходимости путь можно переопределить через BOT_DATA_DIR.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.environ.get("BOT_DATA_DIR", os.path.join(BASE_DIR, "bot_data"))
+DATA_DIR = os.environ.get("BOT_DATA_DIR", "/data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 COUNTER_FILE = os.path.join(DATA_DIR, "order_counter.json")
