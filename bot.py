@@ -52,6 +52,7 @@ HOURS = {
 }
 
 # Категории с соусом
+DELIVERY_HIDDEN_CATS = {"Кофе и чай", "Напитки"}  # напитки не возим на доставку
 SAUCE_CATS = {"Шаурма и сэндвичи"}
 # Категории с добавками
 EXTRAS_CATS = {"Шаурма и сэндвичи", "Шашлык"}
@@ -462,9 +463,11 @@ def kb_points_without_dekabristov():
     return kb.get_keyboard()
 
 
-def kb_categories():
+def kb_categories(order_type="pickup"):
     kb = VkKeyboard(one_time=True)
     for cat in MENU.keys():
+        if order_type == "delivery" and cat in DELIVERY_HIDDEN_CATS:
+            continue
         kb.add_button(cat, color=VkKeyboardColor.SECONDARY)
         kb.add_line()
     kb.add_button("🛒 Оформить заказ", color=VkKeyboardColor.POSITIVE)
@@ -475,10 +478,12 @@ def kb_categories():
 
 def kb_items(category):
     kb = VkKeyboard(one_time=True)
-    for name, price in MENU[category].items():
+    items = list(MENU[category].items())
+    for i, (name, price) in enumerate(items):
         kb.add_button(f"{name} {price}₽", color=VkKeyboardColor.SECONDARY)
-        kb.add_line()
-    # Две служебные кнопки в одной строке — чтобы уложиться в лимит ВК (10 строк)
+        if i % 2 == 1 and i != len(items) - 1:
+            kb.add_line()
+    kb.add_line()
     kb.add_button("◀️ К категориям", color=VkKeyboardColor.SECONDARY)
     kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
@@ -486,17 +491,11 @@ def kb_items(category):
 
 def kb_sauces():
     kb = VkKeyboard(one_time=True)
-    kb.add_button("Фирменный", color=VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("BBQ", color=VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Острый", color=VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Сырный", color=VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Медово-горчичный", color=VkKeyboardColor.SECONDARY)
-    kb.add_line()
-    kb.add_button("Без соуса", color=VkKeyboardColor.SECONDARY)
+    sauces = ["Фирменный", "BBQ", "Острый", "Сырный", "Медово-горчичный", "Без соуса"]
+    for i, s in enumerate(sauces):
+        kb.add_button(s, color=VkKeyboardColor.SECONDARY)
+        if i % 2 == 1 and i != len(sauces) - 1:
+            kb.add_line()
     kb.add_line()
     kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
@@ -505,12 +504,13 @@ def kb_sauces():
 def kb_extras_page1():
     kb = VkKeyboard(one_time=True)
     extras = list(EXTRAS.items())[:7]
-    for extra, price in extras:
+    for i, (extra, price) in enumerate(extras):
         kb.add_button(f"{extra} +{price}₽", color=VkKeyboardColor.SECONDARY)
-        kb.add_line()
-    kb.add_button("🥫 Доп соус +42₽", color=VkKeyboardColor.SECONDARY)
+        if i % 2 == 1:
+            kb.add_line()
     kb.add_line()
-    kb.add_button("➡️ Далее", color=VkKeyboardColor.SECONDARY)
+    kb.add_button("🥫 Доп соус +42₽", color=VkKeyboardColor.SECONDARY)
+    kb.add_button("➡️ Далее", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
@@ -527,9 +527,11 @@ def kb_extra_sauces():
 def kb_extras_page2():
     kb = VkKeyboard(one_time=True)
     extras = list(EXTRAS.items())[8:]
-    for extra, price in extras:
+    for i, (extra, price) in enumerate(extras):
         kb.add_button(f"{extra} +{price}₽", color=VkKeyboardColor.SECONDARY)
-        kb.add_line()
+        if i % 2 == 1 and i != len(extras) - 1:
+            kb.add_line()
+    kb.add_line()
     kb.add_button("✅ Без добавок", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
@@ -548,9 +550,12 @@ def kb_after_item():
 
 def kb_time(slots):
     kb = VkKeyboard(one_time=True)
-    for slot in slots[:9]:
+    slots = slots[:9]
+    for i, slot in enumerate(slots):
         kb.add_button(slot, color=VkKeyboardColor.SECONDARY)
-        kb.add_line()
+        if i % 2 == 1 and i != len(slots) - 1:
+            kb.add_line()
+    kb.add_line()
     kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
@@ -598,7 +603,7 @@ def start_checkout(vk, user_id, state):
     Возвращает True если перешли дальше."""
     order = state["order"]
     if not order["items"]:
-        send(vk, user_id, "Корзина пуста! Добавь хотя бы одну позицию 😊", kb_categories())
+        send(vk, user_id, "Корзина пуста! Добавь хотя бы одну позицию 😊", kb_categories(state["order"].get("order_type","pickup")))
         return
 
     # Доставка — проверка минимальной суммы (только товары, без доставки)
@@ -609,7 +614,7 @@ def start_checkout(vk, user_id, state):
             send(vk, user_id,
                 f"🛒 Минимальная сумма заказа на доставку — {DELIVERY_MIN_ORDER}₽.\n"
                 f"Сейчас на {goods}₽, добавь ещё на {need}₽ 😊",
-                kb_categories())
+                kb_categories(state["order"].get("order_type","pickup")))
             return
         # Выбор режима времени доставки
         state["step"] = "delivery_time_mode"
@@ -927,7 +932,7 @@ def main():
                 f"🚗 Зона: {d['zone']} (+{d['price']}₽)\n\n"
                 f"Теперь собери заказ. Минимум на доставку — {DELIVERY_MIN_ORDER}₽.\n\n"
                 f"Выбери категорию:",
-                kb_categories())
+                kb_categories(state["order"].get("order_type","pickup")))
             continue
 
         # ВЫБОР ТОЧКИ
@@ -961,7 +966,7 @@ def main():
                     state["step"] = "choose_category"
                     send(vk, user_id,
                         f"✅ Точка: {matched}\n\nЧто будешь? Выбери категорию:",
-                        kb_categories())
+                        kb_categories(state["order"].get("order_type","pickup")))
             else:
                 send(vk, user_id, "Выбери точку из списка 👇", kb_points())
             continue
@@ -977,12 +982,17 @@ def main():
                 if cat in text:
                     matched_cat = cat
                     break
+            otype = state["order"].get("order_type", "pickup")
+            # На доставке напитки недоступны
+            if matched_cat and otype == "delivery" and matched_cat in DELIVERY_HIDDEN_CATS:
+                send(vk, user_id, "🚗 На доставке напитки пока недоступны 😔\nВыбери из меню:", kb_categories(otype))
+                continue
             if matched_cat:
                 state["step"] = "choose_item"
                 state["current_category"] = matched_cat
                 send(vk, user_id, f"Выбери позицию из «{matched_cat}»:", kb_items(matched_cat))
             else:
-                send(vk, user_id, "Выбери категорию 👇", kb_categories())
+                send(vk, user_id, "Выбери категорию 👇", kb_categories(otype))
             continue
 
         # ВЫБОР БЛЮДА
@@ -990,7 +1000,7 @@ def main():
             if text == "◀️ К категориям":
                 state["step"] = "choose_category"
                 cart = format_cart(state["order"])
-                send(vk, user_id, f"🛒 Корзина:\n{cart}\n\nВыбери категорию:", kb_categories())
+                send(vk, user_id, f"🛒 Корзина:\n{cart}\n\nВыбери категорию:", kb_categories(state["order"].get("order_type","pickup")))
                 continue
 
             cat = state.get("current_category", "")
@@ -1091,7 +1101,7 @@ def main():
 
         # ПОСЛЕ ДОБАВЛЕНИЯ ПОЗИЦИИ
         if step == "choose_category" and text == "➕ Добавить ещё":
-            send(vk, user_id, "Выбери категорию:", kb_categories())
+            send(vk, user_id, "Выбери категорию:", kb_categories(state["order"].get("order_type","pickup")))
             continue
 
         if step == "choose_category" and text == "🛒 Оформить заказ":
