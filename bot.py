@@ -713,7 +713,9 @@ def kb_upsell_drink():
 
 
 def kb_manager_status(order_num, is_delivery):
-    kb = VkKeyboard(one_time=False)
+    # INLINE-клавиатура прикрепляется к конкретному сообщению с заказом.
+    # Поэтому кнопки старых заказов не исчезают, когда приходит новый заказ.
+    kb = VkKeyboard(one_time=False, inline=True)
     kb.add_button(f"🔥 Готовим #{order_num}", color=VkKeyboardColor.SECONDARY)
     kb.add_line()
     if is_delivery:
@@ -1112,6 +1114,7 @@ def main():
             first_name = "Друг"
 
         # СТАТУСЫ ЗАКАЗА — кнопки менеджера
+        # Кнопки inline, поэтому каждый старый заказ сохраняет свои кнопки статуса.
         if any(text.startswith(prefix) for prefix in ["🔥 Готовим #", "✅ Готов #", "🚗 Курьер выехал #", "✅ Доставлен #", "❌ Отменить #"]):
             try:
                 order_num = text.split("#")[-1].strip()
@@ -1261,9 +1264,25 @@ def main():
                     if not is_delivery_open():
                         send(vk, user_id, "😔 Доставка сейчас закрыта. Можно выбрать самовывоз.", kb_main())
                         continue
-                    state["upsell_extras_shown"] = True
-                    state["upsell_drink_shown"] = True
-                    start_checkout(vk, user_id, state)
+
+                    # При повторе доставки ОБЯЗАТЕЛЬНО подтверждаем адрес,
+                    # даже если он сохранён в прошлом заказе.
+                    saved_d = o.get("delivery") or get_customer(user_id).get("delivery")
+                    if saved_d:
+                        state["order"]["delivery"] = dict(saved_d)
+                        state["step"] = "repeat_confirm_address"
+                        addr = f"{saved_d.get('street')}, д. {saved_d.get('house')}"
+                        if saved_d.get("apt"):
+                            addr += f", кв. {saved_d.get('apt')}"
+                        send(vk, user_id,
+                             f"🚗 Куда доставить повторный заказ?\n\n"
+                             f"🏠 Прошлый адрес: {addr}\n"
+                             f"Зона: {saved_d.get('zone')}\n\n"
+                             f"Подтверди адрес 👇",
+                             kb_saved_address())
+                    else:
+                        state["step"] = "delivery_zone"
+                        send(vk, user_id, "🚗 Уточним адрес доставки. Выбери зону 👇", kb_delivery_zones())
                 else:
                     if not o.get("point") or not is_point_open(o["point"]):
                         send(vk, user_id, "Эта точка сейчас закрыта. Выбери другую точку самовывоза 👇", kb_points())
@@ -1277,6 +1296,26 @@ def main():
                 send(vk, user_id, "🛒 Измени заказ 👇\n\n" + format_cart(state["order"]), kb_cart(state["order"]))
             else:
                 send(vk, user_id, "Выбери действие 👇", kb_repeat_order())
+            continue
+
+        # ПОВТОР ДОСТАВКИ: подтверждение адреса
+        if step == "repeat_confirm_address":
+            if text == "✅ Да, сюда":
+                # Состав заказа уже загружен из прошлого заказа.
+                # После подтверждения адреса продолжаем оформление.
+                state["upsell_extras_shown"] = True
+                state["upsell_drink_shown"] = True
+                start_checkout(vk, user_id, state)
+            elif text == "✏️ Другой адрес":
+                # Сохраняем товары, меняем только адрес доставки.
+                state["order"]["delivery"] = None
+                state["step"] = "delivery_zone"
+                zones_txt = "\n".join(f"• {z} — {p}₽" for z, p in DELIVERY_ZONES.items())
+                send(vk, user_id,
+                     f"🚗 Хорошо, укажем другой адрес.\n\n{zones_txt}\n\nВыбери зону 👇",
+                     kb_delivery_zones())
+            else:
+                send(vk, user_id, "Подтверди прошлый адрес или выбери другой 👇", kb_saved_address())
             continue
 
         # РЕДАКТИРОВАНИЕ КОРЗИНЫ И КОЛИЧЕСТВА
