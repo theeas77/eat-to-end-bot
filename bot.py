@@ -52,7 +52,7 @@ HOURS = {
 }
 
 # Категории с соусом
-DELIVERY_HIDDEN_CATS = {"Кофе и чай", "Напитки"}  # напитки не возим на доставку
+DELIVERY_HIDDEN_CATS = {"Кофе и чай"}  # на доставке нет кофе/чая; морсы и газировка есть
 SAUCE_CATS = {"Шаурма и сэндвичи"}
 # Категории с добавками
 EXTRAS_CATS = {"Шаурма и сэндвичи", "Шашлык"}
@@ -424,6 +424,25 @@ def kb_apt_skip():
     return kb.get_keyboard()
 
 
+def kb_domofon():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("✅ Есть домофон", color=VkKeyboardColor.SECONDARY)
+    kb.add_button("❌ Нет домофона", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
+
+
+def kb_change():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("1000₽", color=VkKeyboardColor.SECONDARY)
+    kb.add_button("1500₽", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("2000₽", color=VkKeyboardColor.SECONDARY)
+    kb.add_button("Без сдачи", color=VkKeyboardColor.POSITIVE)
+    return kb.get_keyboard()
+
+
 def kb_delivery_time():
     kb = VkKeyboard(one_time=True)
     kb.add_button("⚡ Побыстрее (~45 мин)", color=VkKeyboardColor.POSITIVE)
@@ -532,7 +551,7 @@ def kb_extras_page2():
         if i % 2 == 1 and i != len(extras) - 1:
             kb.add_line()
     kb.add_line()
-    kb.add_button("✅ Без добавок", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("➡️ Далее", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
@@ -657,7 +676,8 @@ def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, 
             f"📱 {order.get('phone', 'не указан')}\n"
             f"🚗 Зона: {d['zone']}\n"
             f"🏠 Адрес: {addr}\n"
-            f"🍳 Готовит: {order['point']}\n"
+            + (f"🔔 Домофон: {d['domofon']}\n" if d.get("domofon") else "")
+            + f"🍳 Готовит: {order['point']}\n"
             f"🕒 Время: {order['pickup_time']}\n\n"
             f"{cart}\n\n"
             f"💰 Итого с доставкой: {total}₽\n"
@@ -883,7 +903,7 @@ def main():
                 state["order"]["delivery"] = {
                     "zone": matched_zone[0],
                     "price": matched_zone[1],
-                    "street": None, "house": None, "apt": None,
+                    "street": None, "house": None, "apt": None, "domofon": None,
                 }
                 state["step"] = "delivery_street"
                 send(vk, user_id, "🏠 Напиши улицу:", None)
@@ -919,20 +939,41 @@ def main():
         if step == "delivery_apt":
             if text == "Без квартиры":
                 state["order"]["delivery"]["apt"] = None
+                # Без квартиры домофон не спрашиваем — сразу в меню
+                state["step"] = "choose_category"
+                d = state["order"]["delivery"]
+                addr = f"{d['street']}, д. {d['house']}"
+                send(vk, user_id,
+                    f"✅ Адрес: {addr}\n"
+                    f"🚗 Зона: {d['zone']} (+{d['price']}₽)\n\n"
+                    f"Теперь собери заказ. Минимум на доставку — {DELIVERY_MIN_ORDER}₽.\n\n"
+                    f"Выбери категорию:",
+                    kb_categories("delivery"))
             else:
                 state["order"]["delivery"]["apt"] = text.strip()
-            # Переходим к выбору категории (меню)
+                state["step"] = "delivery_domofon"
+                send(vk, user_id, "🔔 Есть ли домофон?", kb_domofon())
+            continue
+
+        # ДОСТАВКА: домофон
+        if step == "delivery_domofon":
+            if text == "✅ Есть домофон":
+                state["order"]["delivery"]["domofon"] = "есть"
+            elif text == "❌ Нет домофона":
+                state["order"]["delivery"]["domofon"] = "нет"
+            else:
+                send(vk, user_id, "Выбери вариант 👇", kb_domofon())
+                continue
             state["step"] = "choose_category"
             d = state["order"]["delivery"]
-            addr = f"{d['street']}, д. {d['house']}"
-            if d.get("apt"):
-                addr += f", кв. {d['apt']}"
+            addr = f"{d['street']}, д. {d['house']}, кв. {d['apt']}"
             send(vk, user_id,
                 f"✅ Адрес: {addr}\n"
+                f"🔔 Домофон: {d['domofon']}\n"
                 f"🚗 Зона: {d['zone']} (+{d['price']}₽)\n\n"
                 f"Теперь собери заказ. Минимум на доставку — {DELIVERY_MIN_ORDER}₽.\n\n"
                 f"Выбери категорию:",
-                kb_categories(state["order"].get("order_type","pickup")))
+                kb_categories("delivery"))
             continue
 
         # ВЫБОР ТОЧКИ
@@ -1019,6 +1060,7 @@ def main():
                             kb_sauces())
                     elif cat in EXTRAS_CATS:
                         state["step"] = "choose_extras_for_item"
+                        state["extras_page"] = 1
                         send(vk, user_id,
                             f"✅ {name}\n\nХочешь добавки?",
                             kb_extras_page1())
@@ -1042,6 +1084,7 @@ def main():
             if text in SAUCES:
                 state["current_item"]["sauce"] = text
                 state["step"] = "choose_extras_for_item"
+                state["extras_page"] = 1
                 send(vk, user_id, "➕ Хочешь добавки?", kb_extras_page1())
             else:
                 send(vk, user_id, "Выбери соус 👇", kb_sauces())
@@ -1049,20 +1092,27 @@ def main():
 
         # ДОБАВКИ ДЛЯ ПОЗИЦИИ
         if step == "choose_extras_for_item":
+            def _finish_item():
+                state["order"]["items"].append(state["current_item"])
+                nm = state["current_item"]["name"]
+                state["current_item"] = None
+                state["step"] = "choose_category"
+                cart2 = format_cart(state["order"])
+                send(vk, user_id,
+                    f"✅ {nm} добавлен в корзину!\n\n🛒 Корзина:\n{cart2}\n\nДобавить ещё или оформить?",
+                    kb_after_item())
+
             if text == "➡️ Далее":
-                send(vk, user_id, "➕ Ещё добавки:", kb_extras_page2())
+                # На 1-й странице «Далее» ведёт на 2-ю, на 2-й — завершает
+                if state.get("extras_page", 1) == 1:
+                    state["extras_page"] = 2
+                    send(vk, user_id, "➕ Ещё добавки:", kb_extras_page2())
+                else:
+                    _finish_item()
                 continue
 
             if text == "✅ Без добавок":
-                # Добавляем позицию в корзину
-                state["order"]["items"].append(state["current_item"])
-                item_name = state["current_item"]["name"]
-                state["current_item"] = None
-                state["step"] = "choose_category"
-                cart = format_cart(state["order"])
-                send(vk, user_id,
-                    f"✅ {item_name} добавлен в корзину!\n\n🛒 Корзина:\n{cart}\n\nДобавить ещё или оформить?",
-                    kb_after_item())
+                _finish_item()
                 continue
 
             if text == "🥫 Доп соус +42₽":
@@ -1070,6 +1120,7 @@ def main():
                 continue
 
             if text == "◀️ Назад к добавкам":
+                state["extras_page"] = 1
                 send(vk, user_id, "➕ Добавки:", kb_extras_page1())
                 continue
 
@@ -1374,8 +1425,12 @@ def main():
                 continue
 
             if text == "💵 Наличными":
-                _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Наличными курьеру")
-                reset_state(user_id)
+                state["step"] = "delivery_change"
+                send(vk, user_id,
+                    f"💵 С какой суммы подготовить сдачу?\n\n"
+                    f"Итого к оплате: {total}₽\n\n"
+                    f"Выбери или напиши свою сумму 👇",
+                    kb_change())
                 continue
 
         # ОЖИДАНИЕ ОПЛАТЫ
@@ -1406,8 +1461,8 @@ def main():
                     reset_state(user_id)
                 elif status == "pending":
                     send(vk, user_id,
-                        "⏳ Платёж ещё обрабатывается. Подожди минуту и нажми снова.",
-                        None)
+                        "⏳ Платёж ещё обрабатывается. Подожди минуту и нажми «Я оплатил» снова.",
+                        kb_wait_payment(order))
                 else:
                     if order.get("order_type") == "delivery":
                         hint = "⚠️ Оплата не найдена. Оплати онлайн ещё раз или выбери оплату курьеру 👇"
@@ -1430,9 +1485,42 @@ def main():
 
             if text == "💵 Наличными":
                 pending_payments.pop(order.get("payment_id"), None)
-                _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Наличными курьеру")
-                reset_state(user_id)
+                state["step"] = "delivery_change"
+                send(vk, user_id,
+                    f"💵 С какой суммы подготовить сдачу?\n\n"
+                    f"Итого к оплате: {total}₽\n\n"
+                    f"Выбери или напиши свою сумму 👇",
+                    kb_change())
                 continue
+
+        # ДОСТАВКА: сдача с наличных
+        if step == "delivery_change":
+            order = state["order"]
+            total = get_total(order)
+            order_num = order.get("order_num", 0)
+            cart = format_cart(order)
+            pay_status = None
+            if text == "Без сдачи":
+                pay_status = "Наличными курьеру (без сдачи)"
+            else:
+                # Сумма из кнопки (1000₽) или введённая вручную
+                digits = "".join(ch for ch in text if ch.isdigit())
+                if digits:
+                    change_from = int(digits)
+                    if change_from < total:
+                        send(vk, user_id,
+                            f"⚠️ Сумма меньше стоимости заказа ({total}₽).\n"
+                            f"Напиши сумму не меньше {total}₽ или выбери «Без сдачи»:",
+                            kb_change())
+                        continue
+                    pay_status = f"Наличными, сдача с {change_from}₽"
+                else:
+                    send(vk, user_id, "Выбери сумму или напиши число 👇", kb_change())
+                    continue
+            pending_payments.pop(order.get("payment_id"), None)
+            _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, pay_status)
+            reset_state(user_id)
+            continue
 
         # Дефолт
         send(vk, user_id, f"Привет, {first_name}! 👋\nВыбери действие:", kb_main())
