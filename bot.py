@@ -375,7 +375,8 @@ FEEDBACK_URL = "https://vk.com/app6013442_-232479429?form_id=1#form_id=1"
 
 def kb_main():
     kb = VkKeyboard(one_time=False)
-    kb.add_button("🌯 Сделать заказ", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("🏃 Самовывоз", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("🚗 Доставка", color=VkKeyboardColor.PRIMARY)
     kb.add_line()
     kb.add_button("📍 Наши точки", color=VkKeyboardColor.SECONDARY)
     kb.add_button("ℹ️ О нас", color=VkKeyboardColor.SECONDARY)
@@ -409,12 +410,16 @@ def kb_delivery_zones():
         kb.add_button(f"{zone} — {price}₽", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
     kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
 def kb_apt_skip():
     kb = VkKeyboard(one_time=True)
     kb.add_button("Без квартиры", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -423,6 +428,8 @@ def kb_delivery_time():
     kb.add_button("⚡ Побыстрее (~45 мин)", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("🕒 К определённому времени", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -440,7 +447,7 @@ def kb_points():
             status = "✅" if is_point_open(point) else "❌"
             kb.add_button(f"{status} {point}", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
-    kb.add_button("◀️ Назад", color=VkKeyboardColor.NEGATIVE)
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 def kb_points_without_dekabristov():
@@ -451,7 +458,7 @@ def kb_points_without_dekabristov():
         status = "✅" if is_point_open(point) else "❌"
         kb.add_button(f"{status} {point}", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
-    kb.add_button("◀️ Назад", color=VkKeyboardColor.NEGATIVE)
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -462,7 +469,7 @@ def kb_categories():
         kb.add_line()
     kb.add_button("🛒 Оформить заказ", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
-    kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE)
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -472,6 +479,8 @@ def kb_items(category):
         kb.add_button(f"{name} {price}₽", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
     kb.add_button("◀️ К категориям", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -488,6 +497,8 @@ def kb_sauces():
     kb.add_button("Медово-горчичный", color=VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("Без соуса", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -500,6 +511,8 @@ def kb_extras_page1():
     kb.add_button("🥫 Доп соус +42₽", color=VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("➡️ Далее", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 def kb_extra_sauces():
@@ -518,6 +531,8 @@ def kb_extras_page2():
         kb.add_button(f"{extra} +{price}₽", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
     kb.add_button("✅ Без добавок", color=VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -526,6 +541,8 @@ def kb_after_item():
     kb.add_button("➕ Добавить ещё", color=VkKeyboardColor.SECONDARY)
     kb.add_line()
     kb.add_button("🛒 Оформить заказ", color=VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -534,7 +551,7 @@ def kb_time(slots):
     for slot in slots[:9]:
         kb.add_button(slot, color=VkKeyboardColor.SECONDARY)
         kb.add_line()
-    kb.add_button("❌ Отмена", color=VkKeyboardColor.NEGATIVE)
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -543,6 +560,21 @@ def kb_confirm():
     kb.add_button("✅ Подтвердить", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("🔄 Начать заново", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
+
+
+def kb_wait_payment(order):
+    """Кнопки на экране ожидания онлайн-оплаты.
+    Для доставки — запасные варианты: картой курьеру / наличными."""
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("✅ Я оплатил", color=VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    if order.get("order_type") == "delivery":
+        kb.add_button("💳 Картой курьеру", color=VkKeyboardColor.SECONDARY)
+        kb.add_line()
+        kb.add_button("💵 Наличными", color=VkKeyboardColor.SECONDARY)
+    else:
+        kb.add_button("💵 Оплачу при получении", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
 
 
@@ -669,14 +701,22 @@ def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, 
 
 def safe_listen(vk_session):
     """Слушает события ВК. При обрыве сети — переподключается, а не падает"""
+    fails = 0
     while True:
         try:
-            longpoll = VkLongPoll(vk_session)
+            # wait=25 — держим соединение дольше; при обрыве ВК сам вернёт события
+            longpoll = VkLongPoll(vk_session, wait=25)
+            fails = 0
             for event in longpoll.listen():
                 yield event
+        except requests.exceptions.ReadTimeout:
+            # Обычный таймаут долгого опроса — это норма, молча переподключаемся
+            continue
         except Exception as e:
-            print(f"Сбой связи с ВК: {e} — переподключаюсь через 5 сек")
-            time.sleep(5)
+            fails += 1
+            wait = min(5 * fails, 30)  # 5,10,15... но не больше 30 сек
+            print(f"Сбой связи с ВК: {e} — переподключаюсь через {wait} сек")
+            time.sleep(wait)
 
 
 def payment_watcher(vk):
@@ -749,14 +789,15 @@ def main():
             first_name = "Друг"
 
         # СТАРТ
-        if text.lower() in ["начать", "start", "/start", "❌ отмена", "🔄 начать заново", "◀️ назад", "🏠 вернуться в начало"]:
+        if text.lower() in ["начать", "start", "/start", "сначала", "❌ отмена",
+                            "🔄 начать заново", "◀️ назад",
+                            "🏠 вернуться в начало", "🏠 в начало"]:
             reset_state(user_id)
             send(vk, user_id,
                 f"Привет, {first_name}! 👋\n\n"
                 f"Добро пожаловать в Eat to End — шаурма из шашлыка 🌯🔥\n\n"
-                f"🆕 Новость! Открылась новая точка на Декабристов 4а — заходи!\n\n"
-                f"Твой быстрый перекус в удобном месте.\n"
-                f"Оформи заказ и забери готовое без очереди!",
+                f"🚗 Отличная новость — заработала доставка! Ежедневно с 12:00 до 01:00.\n\n"
+                f"Выбери, как хочешь получить заказ 👇",
                 kb_main())
             continue
 
@@ -772,13 +813,13 @@ def main():
                 "🌯 Eat to End — шаурма из шашлыка\n\n"
                 "Мы готовим из качественных продуктов "
                 "в стильном заведении. Мясо на углях — наша фишка.\n\n"
-                "🆕 Новая точка на Декабристов 4а — уже открыта!\n\n"
-                "📍 Наши точки и режим работы:\n"
-                "• Ленина 36/2 с 2 — теперь до утра! ⏰ 09:00 — 05:00\n"
+                "📍 Точки и режим работы:\n"
+                "• Ленина 36/2 с 2 — ⏰ 09:00 — 05:00\n"
                 "• Декабристов 4а — ⏰ 09:00 — 23:00\n"
                 "• Советская 2/10 с 1 — ⛔ временно закрыта\n\n"
-                "💳 Оплата при получении или онлайн\n"
-                "📦 Предзаказ — без очереди\n\n"
+                "🚗 Доставка — ежедневно с 12:00 до 01:00\n\n"
+                "💳 Оплата при получении, онлайн или картой курьеру\n"
+                "📦 Заказ без очереди\n\n"
                 "— Дружелюбно\n— Честно\n— Вкусно",
                 kb_main())
             continue
@@ -792,45 +833,38 @@ def main():
                 kb_main())
             continue
 
-        # НАЧАЛО ЗАКАЗА — выбор типа
-        if text == "🌯 Сделать заказ":
-            state["step"] = "choose_order_type"
+        # САМОВЫВОЗ — сразу из главного меню
+        if text == "🏃 Самовывоз":
+            reset_state(user_id)
+            state = get_state(user_id)
+            state["order"]["order_type"] = "pickup"
+            state["step"] = "choose_point"
             send(vk, user_id,
-                "Как хочешь получить заказ? 👇",
-                kb_order_type(user_id))
+                "📍 Выбери точку самовывоза:\n\n✅ — открыто  ❌ — закрыто",
+                kb_points())
             continue
 
-        # ВЫБОР ТИПА: самовывоз / доставка
-        if step == "choose_order_type":
-            if text == "🏃 Самовывоз":
-                state["order"]["order_type"] = "pickup"
-                state["step"] = "choose_point"
+        # ДОСТАВКА — сразу из главного меню
+        if text == "🚗 Доставка":
+            if DELIVERY_TEST_MODE and user_id != DELIVERY_TEST_USER:
+                send(vk, user_id, "Доставка скоро будет доступна 🚗", kb_main())
+                continue
+            if not is_delivery_open():
                 send(vk, user_id,
-                    "📍 Выбери точку самовывоза:\n\n✅ — открыто  ❌ — закрыто",
-                    kb_points())
+                    "😔 Доставка работает с 12:00 до 01:00.\nСейчас недоступна — попробуй позже или закажи самовывоз.",
+                    kb_main())
                 continue
-            if text == "🚗 Доставка" and (not DELIVERY_TEST_MODE or user_id == DELIVERY_TEST_USER):
-                # Доставка работает 12:00–01:00
-                if not is_delivery_open():
-                    send(vk, user_id,
-                        "😔 Доставка работает с 12:00 до 01:00.\nСейчас недоступна — попробуй позже или закажи самовывоз.",
-                        kb_order_type(user_id))
-                    continue
-                state["order"]["order_type"] = "delivery"
-                state["order"]["point"] = DELIVERY_POINT
-                state["step"] = "delivery_zone"
-                zones_txt = "\n".join(f"• {z} — {p}₽" for z, p in DELIVERY_ZONES.items())
-                send(vk, user_id,
-                    f"🚗 Доставка по зонам:\n{zones_txt}\n\n"
-                    f"Минимальная сумма заказа — {DELIVERY_MIN_ORDER}₽\n\n"
-                    f"Куда везём? Выбери зону 👇",
-                    kb_delivery_zones())
-                continue
-            if text == "◀️ Назад":
-                reset_state(user_id)
-                send(vk, user_id, "Главное меню 👇", kb_main())
-                continue
-            send(vk, user_id, "Выбери способ получения 👇", kb_order_type(user_id))
+            reset_state(user_id)
+            state = get_state(user_id)
+            state["order"]["order_type"] = "delivery"
+            state["order"]["point"] = DELIVERY_POINT
+            state["step"] = "delivery_zone"
+            zones_txt = "\n".join(f"• {z} — {p}₽" for z, p in DELIVERY_ZONES.items())
+            send(vk, user_id,
+                f"🚗 Доставка по зонам:\n{zones_txt}\n\n"
+                f"Минимальная сумма заказа — {DELIVERY_MIN_ORDER}₽\n\n"
+                f"Куда везём? Выбери зону 👇",
+                kb_delivery_zones())
             continue
 
         # ДОСТАВКА: выбор зоны
@@ -1305,15 +1339,11 @@ def main():
                         "secret_key": w_key,
                     }
 
-                    kb = VkKeyboard(one_time=True)
-                    kb.add_button("✅ Я оплатил", color=VkKeyboardColor.POSITIVE)
-                    kb.add_line()
-                    kb.add_button("💵 Оплачу при получении", color=VkKeyboardColor.SECONDARY)
                     send(vk, user_id,
                         f"💳 Ссылка для оплаты заказа #{order_num}:\n\n"
                         f"{pay_url}\n\n"
                         f"После оплаты заказ уйдёт на кухню автоматически 👌",
-                        kb.get_keyboard())
+                        kb_wait_payment(order))
                 else:
                     send(vk, user_id,
                         "⚠️ Не удалось создать ссылку на оплату.\nОплатишь при получении?",
@@ -1369,18 +1399,28 @@ def main():
                         "⏳ Платёж ещё обрабатывается. Подожди минуту и нажми снова.",
                         None)
                 else:
-                    kb = VkKeyboard(one_time=True)
-                    kb.add_button("✅ Я оплатил", color=VkKeyboardColor.POSITIVE)
-                    kb.add_line()
-                    kb.add_button("💵 Оплачу при получении", color=VkKeyboardColor.SECONDARY)
-                    send(vk, user_id,
-                        "⚠️ Оплата не найдена. Попробуй ещё раз или выбери оплату при получении.",
-                        kb.get_keyboard())
+                    if order.get("order_type") == "delivery":
+                        hint = "⚠️ Оплата не найдена. Оплати онлайн ещё раз или выбери оплату курьеру 👇"
+                    else:
+                        hint = "⚠️ Оплата не найдена. Попробуй ещё раз или выбери оплату при получении."
+                    send(vk, user_id, hint, kb_wait_payment(order))
                 continue
 
             if text == "💵 Оплачу при получении":
                 pending_payments.pop(order.get("payment_id"), None)
                 _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Оплата при получении")
+                reset_state(user_id)
+                continue
+
+            if text == "💳 Картой курьеру":
+                pending_payments.pop(order.get("payment_id"), None)
+                _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Картой курьеру")
+                reset_state(user_id)
+                continue
+
+            if text == "💵 Наличными":
+                pending_payments.pop(order.get("payment_id"), None)
+                _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, total, "Наличными курьеру")
                 reset_state(user_id)
                 continue
 
