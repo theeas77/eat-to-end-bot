@@ -478,8 +478,8 @@ def kb_items(category):
     for name, price in MENU[category].items():
         kb.add_button(f"{name} {price}₽", color=VkKeyboardColor.SECONDARY)
         kb.add_line()
+    # Две служебные кнопки в одной строке — чтобы уложиться в лимит ВК (10 строк)
     kb.add_button("◀️ К категориям", color=VkKeyboardColor.SECONDARY)
-    kb.add_line()
     kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
