@@ -25,7 +25,7 @@ VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0x
 ADMIN_VK_ID = 1118370233
 
 # --- ДОСТАВКА ---
-DELIVERY_TEST_MODE = True          # True — доставку видит только DELIVERY_TEST_USER
+DELIVERY_TEST_MODE = False         # False — доставка доступна всем
 DELIVERY_TEST_USER = 72534661      # VK ID для теста доставки (ivshiin)
 DELIVERY_POINT = "Ленина 36/2"     # с какой точки готовят доставку
 DELIVERY_MIN_ORDER = 500           # минимальная сумма заказа на доставку (только товары), ₽
@@ -420,7 +420,7 @@ def kb_apt_skip():
 
 def kb_delivery_time():
     kb = VkKeyboard(one_time=True)
-    kb.add_button("⚡ Побыстрее (~60 мин)", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("⚡ Побыстрее (~45 мин)", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("🕒 К определённому времени", color=VkKeyboardColor.SECONDARY)
     return kb.get_keyboard()
@@ -583,7 +583,7 @@ def start_checkout(vk, user_id, state):
         state["step"] = "delivery_time_mode"
         send(vk, user_id,
             "🕒 Когда доставить?\n\n"
-            "⚡ Побыстрее — в течение ~60 минут (зависит от загруженности)\n"
+            "⚡ Побыстрее — в течение ~45 минут (зависит от загруженности)\n"
             "🕒 К определённому времени — не раньше чем через 90 минут",
             kb_delivery_time())
         return
@@ -1066,8 +1066,8 @@ def main():
 
         # ДОСТАВКА: режим времени
         if step == "delivery_time_mode":
-            if text == "⚡ Побыстрее (~60 мин)":
-                state["order"]["pickup_time"] = "Побыстрее (~60 мин)"
+            if text == "⚡ Побыстрее (~45 мин)":
+                state["order"]["pickup_time"] = "Побыстрее (~45 мин)"
                 state["order"]["delivery_asap"] = True
                 state["step"] = "enter_phone"
                 send(vk, user_id,
