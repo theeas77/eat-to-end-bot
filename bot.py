@@ -773,7 +773,6 @@ def request_phone(vk, user_id, state):
     else:
         state["step"] = "enter_phone"
         send(vk, user_id, "📱 Укажи номер телефона для связи\n\nНапиши в формате: 89991234567")
-        send(vk, user_id, "📱 Укажи номер телефона для связи\n\nНапиши в формате: 89991234567")
 
 
 def kb_time(slots):
