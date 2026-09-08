@@ -50,6 +50,23 @@ DELIVERY_ZONES = {
     "Прикамский": 350,
 }
 
+# --- ДИНАМИЧЕСКОЕ ВРЕМЯ ДОСТАВКИ "ПОБЫСТРЕЕ" ---
+# В часы пик кухня загружена сильнее, поэтому оценка времени больше.
+DELIVERY_PEAK_HOURS = [(12, 14), (17, 19)]  # окна пика: [начало, конец)
+DELIVERY_ASAP_NORMAL = 45   # минут в обычное время
+DELIVERY_ASAP_PEAK = 60     # минут в часы пик
+
+
+def get_asap_minutes():
+    """Оценка времени доставки «Побыстрее» с учётом загрузки кухни.
+    Возвращает (минут, пик?) — во время пиков дольше."""
+    h = datetime.datetime.now(TZ).hour
+    for start_h, end_h in DELIVERY_PEAK_HOURS:
+        if start_h <= h < end_h:
+            return DELIVERY_ASAP_PEAK, True
+    return DELIVERY_ASAP_NORMAL, False
+
+
 MANAGERS = {
     "Ленина 36/2": 1118370233,
     "Декабристов 4а": 1118370233,
@@ -540,7 +557,7 @@ def kb_change():
 
 def kb_delivery_time():
     kb = VkKeyboard(one_time=True)
-    kb.add_button("⚡ Побыстрее (~45 мин)", color=VkKeyboardColor.POSITIVE)
+    kb.add_button("⚡ Побыстрее", color=VkKeyboardColor.POSITIVE)
     kb.add_line()
     kb.add_button("🕒 К определённому времени", color=VkKeyboardColor.SECONDARY)
     kb.add_line()
@@ -881,13 +898,28 @@ def start_checkout(vk, user_id, state):
                 f"Сейчас на {goods}₽, добавь ещё на {need}₽ 😊",
                 kb_categories(state["order"].get("order_type","pickup")))
             return
-        # Выбор режима времени доставки
-        state["step"] = "delivery_time_mode"
-        send(vk, user_id,
-            "🕒 Когда доставить?\n\n"
-            "⚡ Побыстрее — в течение ~45 минут (зависит от загруженности)\n" +
-            ("🕒 К определённому времени — не раньше чем через 90 минут" if DELIVERY_TIME_LIMITS_ENABLED else "🕒 К определённому времени — любое время для теста"),
-            kb_delivery_time())
+        # Доставка открыта — доступны «Побыстрее» и «К определённому времени».
+        # Доставка закрыта — оформляем предзаказ на 12:30–01:00.
+        if is_delivery_open():
+            state["order"]["is_preorder"] = False
+            asap_min, is_peak = get_asap_minutes()
+            load_note = "🔥 Кухня сейчас средне загружена\n\n" if is_peak else ""
+            state["step"] = "delivery_time_mode"
+            send(vk, user_id,
+                "🕒 Когда доставить?\n\n"
+                f"{load_note}"
+                f"⚡ Побыстрее — примерно {asap_min} минут\n" +
+                ("🕒 К определённому времени — не раньше чем через 90 минут" if DELIVERY_TIME_LIMITS_ENABLED else "🕒 К определённому времени — любое время для теста"),
+                kb_delivery_time())
+        else:
+            state["order"]["is_preorder"] = True
+            state["step"] = "delivery_time_custom"
+            send(vk, user_id,
+                "🌙 Сейчас доставка не работает (она с 12:00 до 01:00),\n"
+                "но можно оформить предзаказ 🚗\n\n"
+                "🕒 Напиши время доставки в формате ЧЧ:ММ.\n"
+                "Доступное время: с 12:30 до 01:00",
+                None)
         return
 
     # Самовывоз — как раньше
@@ -1290,15 +1322,18 @@ def main():
             if DELIVERY_TEST_MODE and user_id != DELIVERY_TEST_USER:
                 send(vk, user_id, "Доставка скоро будет доступна 🚗", kb_main())
                 continue
-            if not is_delivery_open():
-                send(vk, user_id,
-                    "😔 Доставка работает с 12:00 до 01:00.\nСейчас недоступна — попробуй позже или закажи самовывоз.",
-                    kb_main())
-                continue
             reset_state(user_id)
             state = get_state(user_id)
             state["order"]["order_type"] = "delivery"
             state["order"]["point"] = DELIVERY_POINT
+            # Доставку можно оформить в любое время. Если сейчас нерабочие часы —
+            # предупреждаем, что это будет предзаказ на 12:30–01:00.
+            preorder_note = ""
+            if not is_delivery_open():
+                preorder_note = (
+                    "🌙 Сейчас доставка не работает (она с 12:00 до 01:00).\n"
+                    "Можно оформить предзаказ — доставим ко времени с 12:30 до 01:00 🚗\n\n"
+                )
             customer = get_customer(user_id)
             saved_d = customer.get("delivery")
             # На всякий случай берём адрес и из прошлого заказа, если отдельное поле ещё не было сохранено.
@@ -1312,12 +1347,12 @@ def main():
                 addr = f"{saved_d.get('street')}, д. {saved_d.get('house')}"
                 if saved_d.get("apt"):
                     addr += f", кв. {saved_d.get('apt')}"
-                send(vk, user_id, f"🚗 Доставить снова сюда?\n\n🏠 {addr}\nЗона: {saved_d.get('zone')}", kb_saved_address())
+                send(vk, user_id, f"{preorder_note}🚗 Доставить снова сюда?\n\n🏠 {addr}\nЗона: {saved_d.get('zone')}", kb_saved_address())
             else:
                 state["step"] = "delivery_zone"
                 zones_txt = "\n".join(f"• {z} — {p}₽" for z, p in DELIVERY_ZONES.items())
                 send(vk, user_id,
-                    f"🚗 Доставка по зонам:\n{zones_txt}\n\n"
+                    f"{preorder_note}🚗 Доставка по зонам:\n{zones_txt}\n\n"
                     f"Минимальная сумма заказа — {DELIVERY_MIN_ORDER}₽\n\n"
                     f"Куда везём? Выбери зону 👇",
                     kb_delivery_zones())
@@ -1328,9 +1363,8 @@ def main():
             if text == "✅ Повторить этот заказ":
                 o = state["order"]
                 if o.get("order_type") == "delivery":
-                    if not is_delivery_open():
-                        send(vk, user_id, "😔 Доставка сейчас закрыта. Можно выбрать самовывоз.", kb_main())
-                        continue
+                    # Доставку можно повторить в любое время: в нерабочие часы
+                    # это станет предзаказом (обрабатывается на шаге выбора времени).
 
                     # При повторе доставки ОБЯЗАТЕЛЬНО подтверждаем адрес,
                     # даже если он сохранён в прошлом заказе.
@@ -1752,8 +1786,9 @@ def main():
 
         # ДОСТАВКА: режим времени
         if step == "delivery_time_mode":
-            if text == "⚡ Побыстрее (~45 мин)":
-                state["order"]["pickup_time"] = "Побыстрее (~45 мин)"
+            if text.startswith("⚡ Побыстрее"):
+                asap_min, _ = get_asap_minutes()
+                state["order"]["pickup_time"] = f"Побыстрее (~{asap_min} мин)"
                 state["order"]["delivery_asap"] = True
                 request_phone(vk, user_id, state)
                 continue
@@ -1773,6 +1808,7 @@ def main():
 
         # ДОСТАВКА: ввод точного времени
         if step == "delivery_time_custom":
+            is_preorder = state["order"].get("is_preorder", False)
             if len(text) == 5 and ":" in text:
                 try:
                     now = datetime.datetime.now(TZ)
@@ -1782,6 +1818,21 @@ def main():
                     input_dt = datetime.datetime.combine(now.date(), datetime.time(h, m), tzinfo=TZ)
                     if input_dt < now:
                         input_dt += datetime.timedelta(days=1)
+
+                    if is_preorder:
+                        # Предзаказ в нерабочие часы: окно 12:30–01:00, без правила 90 минут.
+                        hh = h + m / 60
+                        preorder_ok = hh >= 12.5 or hh <= 1.0
+                        if not preorder_ok:
+                            send(vk, user_id,
+                                "⚠️ Предзаказ доступен с 12:30 до 01:00.\n"
+                                "Напиши время в этом окне (например 12:30):", None)
+                        else:
+                            state["order"]["pickup_time"] = f"{text} (предзаказ)"
+                            state["order"]["delivery_asap"] = False
+                            request_phone(vk, user_id, state)
+                        continue
+
                     min_time = now + datetime.timedelta(minutes=90)
                     # Проверка ограничений доставки; для теста их можно полностью отключить
                     if DELIVERY_TIME_LIMITS_ENABLED:
