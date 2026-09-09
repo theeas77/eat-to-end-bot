@@ -583,24 +583,6 @@ def notification_retry_watcher(vk):
                                 f"Заказ #{order_num}, клиент VK ID {client_id}. Уже 3 фоновые попытки.")
                         changed = True
 
-                # Карточка курьеру после статуса «Курьер выехал».
-                courier_msg = info.get("pending_courier_notification")
-                if courier_msg:
-                    if send(vk, COURIER_VK_ID, courier_msg, kb_courier(order_num)):
-                        info.pop("pending_courier_notification", None)
-                        info["courier_notify_failures"] = 0
-                        info["courier_notified_at"] = time.time()
-                        changed = True
-                        print(f"COURIER RETRY OK #{order_num} -> {COURIER_VK_ID}")
-                    else:
-                        info["courier_notify_failures"] = int(info.get("courier_notify_failures", 0)) + 1
-                        if info["courier_notify_failures"] == 3:
-                            send_emergency_alert(vk,
-                                "Не удаётся отправить заказ курьеру",
-                                f"Заказ #{order_num}, курьер VK ID {COURIER_VK_ID}. Уже 3 фоновые попытки. "
-                                "Проверь, что курьер разрешил сообщения сообщества и хотя бы один раз написал в группу.")
-                        changed = True
-
             if changed:
                 _save_json(ACTIVE_ORDERS_FILE, active_orders)
         except Exception as e:
@@ -2907,11 +2889,6 @@ def main():
                     if mgr != user_id:
                         send(vk, mgr, f"Курьер обновил заказ #{order_num}: {requested}")
 
-                if requested == "🚗 Курьер выехал" and COURIER_VK_ID:
-                    courier_ok = _send_courier_card(vk, order_num, info)
-                    if not courier_ok:
-                        send(vk, user_id,
-                             f"⚠️ Заказ #{order_num} пока не доставлен курьеру в VK. Бот будет повторять отправку автоматически.")
             except Exception as e:
                 print(f"Ошибка статуса: {e}")
                 send_emergency_alert(vk, "Ошибка изменения статуса заказа", str(e)[:500])
