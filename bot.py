@@ -2695,6 +2695,10 @@ def main():
     print(f"Активные заказы: {ACTIVE_ORDERS_FILE}")
 
     for event in safe_listen(vk_session):
+        try:
+            print(f"EVT type={getattr(event, 'type', '?')} to_me={getattr(event, 'to_me', '?')} from_me={getattr(event, 'from_me', '?')} text={getattr(event, 'text', '')!r}")
+        except Exception:
+            pass
         if not (event.type == VkEventType.MESSAGE_NEW and event.to_me and not event.from_me):
             continue
 
@@ -2729,6 +2733,7 @@ def main():
             try:
                 order_num = text.split("#")[-1].strip()
                 info = active_orders.get(order_num)
+                print(f"STATUS order_num={order_num!r} found={'yes' if info else 'NO'} active_keys={list(active_orders.keys())}")
                 if not info:
                     send(vk, user_id, "⚠️ Этот заказ не найден или уже старше 24 часов.")
                     continue
