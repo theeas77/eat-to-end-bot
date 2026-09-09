@@ -523,7 +523,13 @@ def active_orders_cleaner():
 
 
 def notification_retry_watcher(vk):
-    """Если ВК был недоступен в момент заказа — досылает уведомление кассиру/клиенту."""
+    """Досылает все важные VK-уведомления, если первая отправка не удалась.
+
+    Помимо первоначальной карточки заказа повторяет:
+    - новый статус клиенту;
+    - карточку курьеру после «Курьер выехал».
+    Поэтому краткий сбой VK больше не приводит к потере статуса/доставки.
+    """
     while True:
         time.sleep(30)
         changed = False
@@ -558,6 +564,43 @@ def notification_retry_watcher(vk):
                                 "Повторно не удаётся уведомить клиента",
                                 f"Заказ #{order_num}, клиент VK ID {client_id}. Уже 3 фоновые попытки.")
                         changed = True
+
+                # Статус заказа клиенту. Храним последнее актуальное сообщение,
+                # поэтому даже после краткого падения VK клиент получит текущий статус.
+                status_msg = info.get("pending_client_status_notification")
+                if status_msg:
+                    client_id = int(info.get("user_id"))
+                    if send(vk, client_id, status_msg, kb_main()):
+                        info.pop("pending_client_status_notification", None)
+                        info["status_notify_failures"] = 0
+                        changed = True
+                        print(f"STATUS RETRY OK #{order_num} -> client {client_id}")
+                    else:
+                        info["status_notify_failures"] = int(info.get("status_notify_failures", 0)) + 1
+                        if info["status_notify_failures"] == 3:
+                            send_emergency_alert(vk,
+                                "Не удаётся отправить статус клиенту",
+                                f"Заказ #{order_num}, клиент VK ID {client_id}. Уже 3 фоновые попытки.")
+                        changed = True
+
+                # Карточка курьеру после статуса «Курьер выехал».
+                courier_msg = info.get("pending_courier_notification")
+                if courier_msg:
+                    if send(vk, COURIER_VK_ID, courier_msg, kb_courier(order_num)):
+                        info.pop("pending_courier_notification", None)
+                        info["courier_notify_failures"] = 0
+                        info["courier_notified_at"] = time.time()
+                        changed = True
+                        print(f"COURIER RETRY OK #{order_num} -> {COURIER_VK_ID}")
+                    else:
+                        info["courier_notify_failures"] = int(info.get("courier_notify_failures", 0)) + 1
+                        if info["courier_notify_failures"] == 3:
+                            send_emergency_alert(vk,
+                                "Не удаётся отправить заказ курьеру",
+                                f"Заказ #{order_num}, курьер VK ID {COURIER_VK_ID}. Уже 3 фоновые попытки. "
+                                "Проверь, что курьер разрешил сообщения сообщества и хотя бы один раз написал в группу.")
+                        changed = True
+
             if changed:
                 _save_json(ACTIVE_ORDERS_FILE, active_orders)
         except Exception as e:
@@ -1756,9 +1799,8 @@ def kb_courier(order_num):
     return kb.get_keyboard()
 
 
-def _send_courier_card(vk, order_num, info):
-    """Отправляет курьеру карточку доставки: адрес, телефон, комментарий,
-    сумма и способ оплаты + кнопки статуса."""
+def _build_courier_card_text(order_num, info):
+    """Текст карточки доставки для курьера."""
     addr = info.get("address") or "—"
     phone = info.get("phone") or "—"
     comment = info.get("comment") or ""
@@ -1774,7 +1816,7 @@ def _send_courier_card(vk, order_num, info):
         payment_block = ((f"💰 Получить: {total}₽\n" if total is not None else "")
                          + f"💵 Оплата: {pay}")
 
-    txt = (
+    return (
         f"🚗 Доставка #{order_num}\n\n"
         f"🏠 Адрес: {addr}\n"
         + (f"🗺 Зона: {zone}\n" if zone else "")
@@ -1782,10 +1824,55 @@ def _send_courier_card(vk, order_num, info):
         + (f"💬 Комментарий: {comment}\n" if comment else "")
         + f"\n{payment_block}"
     )
-    if not send(vk, COURIER_VK_ID, txt, kb_courier(order_num)):
-        send_emergency_alert(vk,
-            "Не удалось отправить карточку курьеру",
-            f"Заказ #{order_num}. Проверь Railway Logs и заказ вручную.")
+
+
+def _send_courier_card(vk, order_num, info):
+    """Надёжно отправляет карточку курьеру.
+
+    Если VK не принял сообщение сейчас, карточка остаётся в active_orders
+    и notification_retry_watcher будет досылать её каждые 30 секунд.
+    """
+    txt = _build_courier_card_text(order_num, info)
+    # Сначала сохраняем, потом пытаемся отправить — так Deploy/Restart не потеряет карточку.
+    info["pending_courier_notification"] = txt
+    info["courier_notify_failures"] = 0
+    _save_json(ACTIVE_ORDERS_FILE, active_orders)
+
+    ok = send(vk, COURIER_VK_ID, txt, kb_courier(order_num))
+    print(f"COURIER SEND #{order_num} -> {COURIER_VK_ID}: {'OK' if ok else 'FAIL'}")
+    if ok:
+        info.pop("pending_courier_notification", None)
+        info["courier_notified_at"] = time.time()
+        _save_json(ACTIVE_ORDERS_FILE, active_orders)
+        return True
+
+    send_emergency_alert(vk,
+        "Не удалось отправить карточку курьеру",
+        f"Заказ #{order_num}, курьер VK ID {COURIER_VK_ID}. Карточка сохранена и будет досылаться автоматически. "
+        "Проверь, что курьер разрешил сообщения сообщества и хотя бы один раз написал в группу.")
+    return False
+
+
+def _send_client_status(vk, order_num, info, client_text):
+    """Надёжно отправляет новый статус клиенту с фоновой досылкой при сбое VK."""
+    client_id = int(info["user_id"])
+    # Сохраняем ДО отправки, чтобы статус не потерялся при Restart между save/send.
+    info["pending_client_status_notification"] = client_text
+    info["status_notify_failures"] = 0
+    _save_json(ACTIVE_ORDERS_FILE, active_orders)
+
+    ok = send(vk, client_id, client_text, kb_main())
+    print(f"STATUS SEND #{order_num} -> client {client_id}: {'OK' if ok else 'FAIL'}")
+    if ok:
+        info.pop("pending_client_status_notification", None)
+        info["last_client_status_notified_at"] = time.time()
+        _save_json(ACTIVE_ORDERS_FILE, active_orders)
+        return True
+
+    send_emergency_alert(vk,
+        "Не удалось отправить статус клиенту",
+        f"Заказ #{order_num}, клиент VK ID {client_id}. Статус сохранён и будет досылаться автоматически.")
+    return False
 
 
 def kb_staff_menu():
@@ -2808,9 +2895,12 @@ def main():
                 info["status_updated_at"] = time.time()
                 _save_json(ACTIVE_ORDERS_FILE, active_orders)
 
-                client_id = int(info["user_id"])
-                send(vk, client_id, client_text, kb_main())
-                send(vk, user_id, f"Статус заказа #{order_num}: {requested}")
+                # Статус клиенту больше не теряется при кратком сбое VK:
+                # сначала сохраняем уведомление в /data, затем отправляем, при ошибке watcher досылает.
+                client_ok = _send_client_status(vk, order_num, info, client_text)
+                send(vk, user_id,
+                     f"Статус заказа #{order_num}: {requested}"
+                     + ("\n✅ Клиент уведомлён." if client_ok else "\n⚠️ Клиенту пока не доставлено — бот будет повторять автоматически."))
 
                 if is_courier:
                     mgr = int(info.get("manager_id", ADMIN_VK_ID))
@@ -2818,7 +2908,10 @@ def main():
                         send(vk, mgr, f"Курьер обновил заказ #{order_num}: {requested}")
 
                 if requested == "🚗 Курьер выехал" and COURIER_VK_ID:
-                    _send_courier_card(vk, order_num, info)
+                    courier_ok = _send_courier_card(vk, order_num, info)
+                    if not courier_ok:
+                        send(vk, user_id,
+                             f"⚠️ Заказ #{order_num} пока не доставлен курьеру в VK. Бот будет повторять отправку автоматически.")
             except Exception as e:
                 print(f"Ошибка статуса: {e}")
                 send_emergency_alert(vk, "Ошибка изменения статуса заказа", str(e)[:500])
