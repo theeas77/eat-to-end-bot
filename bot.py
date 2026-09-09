@@ -49,6 +49,11 @@ YUKASSA_SECRET_KEY_SOVETSKAYA = "live_U_Z86aPDfocmL1uteRrfHhyXVigb4sqinsDwRD8v5J
 
 VK_TOKEN = "vk1.a.lbcUXPokTxgPCYnlF_UcqQGaHW4nbI2dkqpNUfqL2tGCrjhST6s-4yoeGf6z0xrx1B1TXjcaWMu1EAWDDrqfH9us2nT7381dpYQUaiiXbaZAwqZbpEVGQ9oxyw3Bqsu_mbdyWdFVKlhcbNZE3lybJXXGoadma1fWTdzjtADUvTTZR2bbIySqQn8_qlyj5bYTzaC1DzmOHoWGJkRH_szQsA"
 ADMIN_VK_ID = 1118370233
+# Префиксы текстов inline-кнопок статуса заказа (у менеджера и курьера).
+STATUS_PREFIXES = [
+    "🔥 Готовим #", "✅ Готов #", "🚗 Курьер выехал #", "✅ Доставлен #",
+    "❌ Отменить #", "↩️ Возврат и отмена #", "🚫 Не отменять #", "⏱ Задержка +15 мин #",
+]
 COURIER_VK_ID = 72534661   # VK ID курьера: карточка доставки + кнопки статуса
 ERROR_ALERT_VK_ID = 72534661  # Только сюда отправляются аварийные уведомления бота
 STAFF = {1118370233}   # VK ID сотрудников: пульт (загрузка кухни + стоп-лист)
@@ -2695,11 +2700,14 @@ def main():
     print(f"Активные заказы: {ACTIVE_ORDERS_FILE}")
 
     for event in safe_listen(vk_session):
-        try:
-            print(f"EVT type={getattr(event, 'type', '?')} to_me={getattr(event, 'to_me', '?')} from_me={getattr(event, 'from_me', '?')} text={getattr(event, 'text', '')!r}")
-        except Exception:
-            pass
-        if not (event.type == VkEventType.MESSAGE_NEW and event.to_me and not event.from_me):
+        if event.type != VkEventType.MESSAGE_NEW:
+            continue
+        _preview = (getattr(event, "text", "") or "").strip()
+        _is_status_cmd = any(_preview.startswith(p) for p in STATUS_PREFIXES)
+        # Клиенты пишут как входящие (to_me). Кнопки статуса менеджер нажимает
+        # с аккаунта самого бота — VK помечает их как исходящие (from_me),
+        # поэтому статус-команды пропускаем через фильтр и в этом случае.
+        if not ((event.to_me and not event.from_me) or (event.from_me and _is_status_cmd)):
             continue
 
         msg_key = f"{event.user_id}_{event.message_id}"
@@ -2729,16 +2737,17 @@ def main():
             first_name = "Друг"
 
         # СТАТУСЫ ЗАКАЗА — строгая последовательность, старые inline-кнопки безопасны.
-        if any(text.startswith(prefix) for prefix in ["🔥 Готовим #", "✅ Готов #", "🚗 Курьер выехал #", "✅ Доставлен #", "❌ Отменить #", "↩️ Возврат и отмена #", "🚫 Не отменять #", "⏱ Задержка +15 мин #"]):
+        if any(text.startswith(prefix) for prefix in STATUS_PREFIXES):
             try:
                 order_num = text.split("#")[-1].strip()
                 info = active_orders.get(order_num)
-                print(f"STATUS order_num={order_num!r} found={'yes' if info else 'NO'} active_keys={list(active_orders.keys())}")
+                print(f"STATUS order_num={order_num!r} found={'yes' if info else 'NO'} from_me={getattr(event, 'from_me', None)}")
                 if not info:
                     send(vk, user_id, "⚠️ Этот заказ не найден или уже старше 24 часов.")
                     continue
 
-                is_manager = (user_id == int(info.get("manager_id", -1)))
+                # from_me = владелец аккаунта-бота нажал кнопку сам → это менеджер.
+                is_manager = bool(getattr(event, "from_me", False)) or (user_id == int(info.get("manager_id", -1)))
                 is_courier = (user_id == COURIER_VK_ID)
                 if not (is_manager or is_courier):
                     send(vk, user_id, "⚠️ У тебя нет доступа к статусу этого заказа.")
