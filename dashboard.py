@@ -115,12 +115,10 @@ def _stop_payload(scope_point):
     stop_list = CTX["stop_list"]
     all_items = CTX["ALL_ITEMS"]
     points = list(CTX["STOP_POINTS"])
-    view_point = scope_point if scope_point in points else points[0]
-    stopped = set(stop_list.get(view_point, []))
-    items = []
-    for idx, (cat, name) in enumerate(all_items, start=1):
-        items.append({"idx": idx, "cat": cat, "name": name, "stopped": name in stopped})
-    return {"points": points, "view_point": view_point, "items": items}
+    default_point = scope_point if scope_point in points else points[0]
+    items = [{"idx": i, "cat": c, "name": n} for i, (c, n) in enumerate(all_items, start=1)]
+    stopped_by = {p: list(stop_list.get(p, [])) for p in points}
+    return {"points": points, "default_point": default_point, "items": items, "stopped_by": stopped_by}
 
 
 def _clients_payload():
@@ -453,8 +451,8 @@ function orderCard(o){
    <div class="row"><span class="num">#${o.num}</span>
      <span class="badge ${o.type==='Доставка'?'d':''}">${o.type}</span>
      <span class="badge">${esc(o.point)}</span>${payTag}<span class="sp" style="flex:1"></span>
-     <span class="st">${o.final?'✅ ':''}${esc(o.status)}</span></div>
-   <div class="mut" style="margin-top:6px">🕒 ${esc(o.time)} · 💰 ${o.total!=null?o.total+'₽':'—'} · 💳 ${esc(o.pay)}</div>
+     <span class="st">${esc(o.status)}</span></div>
+   ${(o.time||o.total!=null||o.pay)?`<div class="mut" style="margin-top:6px">${o.time?'🕒 '+esc(o.time):''}${o.total!=null?' · 💰 '+o.total+'₽':''}${o.pay?' · 💳 '+esc(o.pay):''}</div>`:''}
    ${o.address?`<div class="mut">🏠 ${esc(o.address)}</div>`:''}
    ${o.phone?`<div class="mut">📱 ${esc(o.phone)}</div>`:''}
    ${o.comment?`<div class="mut">💬 ${esc(o.comment)}</div>`:''}
@@ -474,17 +472,15 @@ function view(){
    return `<div class="grid">${body}</div>${doneBody}`;
  }
  if(S.tab==='stop'){
-   const pts=d.stop.points;const vp=S.stopPoint||d.stop.view_point;
+   const pts=d.stop.points;const vp=(S.stopPoint&&pts.includes(S.stopPoint))?S.stopPoint:d.stop.default_point;
+   const stopped=new Set(d.stop.stopped_by[vp]||[]);
    const seg=pts.map(p=>`<button class="s ${p===vp?'on':''}" onclick="S.stopPoint='${p}';render()">${esc(p)}</button>`).join('');
-   // элементы из стоп-листа выбранной точки берём с сервера только для view_point,
-   // поэтому при смене точки перезапрашиваем через tick + фильтр на клиенте недоступен —
-   // показываем текущий список сервера, а переключение точки шлём как запрос стопа.
-   const items=d.stop.items.map(it=>`<div class="stopitem">
+   const items=d.stop.items.map(it=>{const isStop=stopped.has(it.name);
+     return `<div class="stopitem">
      <div><b>${it.idx}.</b> ${esc(it.name)} <span class="mut">· ${esc(it.cat)}</span></div>
-     <button class="pill ${it.stopped?'on':'off'}" onclick="toggleStop('${vp}',${it.idx})">${it.stopped?'⛔ в стопе':'✅ в продаже'}</button>
-   </div>`).join('');
-   const note = vp!==d.stop.view_point?'<div class="hint">Список ниже — для точки '+esc(d.stop.view_point)+'. Нажми позицию, чтобы переключить на '+esc(vp)+' (обновится после действия).</div>':'';
-   return `<div class="seg">${seg}</div>${note}<div class="card" style="padding:0">${items}</div>`;
+     <button class="pill ${isStop?'on':'off'}" onclick="toggleStop('${vp}',${it.idx})">${isStop?'⛔ в стопе':'✅ в продаже'}</button>
+   </div>`;}).join('');
+   return `<div class="seg">${seg}</div><div class="card" style="padding:0">${items}</div>`;
  }
  if(S.tab==='load'){
    const cur=d.load;
