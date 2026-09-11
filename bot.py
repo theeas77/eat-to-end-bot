@@ -12,6 +12,7 @@ import copy
 import signal
 import atexit
 from zoneinfo import ZoneInfo
+import dashboard  # веб-панель кассира (тот же процесс, тот же /data)
 
 TZ = ZoneInfo("Asia/Yekaterinburg")  # UTC+5 Пермь
 
@@ -2688,6 +2689,32 @@ def main():
     cleanup_payment_records()
     vk_session = vk_api.VkApi(token=VK_TOKEN)
     vk = vk_session.get_api()
+
+    # Веб-панель кассира: заказы, статусы, стоп-лист, загрузка, клиенты.
+    try:
+        dashboard.start_dashboard({
+            "vk": vk,
+            "active_orders": active_orders,
+            "customers": customers,
+            "stop_list": stop_list,
+            "kitchen_load": kitchen_load,
+            "save_json": _save_json,
+            "ACTIVE_ORDERS_FILE": ACTIVE_ORDERS_FILE,
+            "STOP_LIST_FILE": STOP_LIST_FILE,
+            "KITCHEN_LOAD_FILE": KITCHEN_LOAD_FILE,
+            "send": send,
+            "toggle_stop": toggle_stop,
+            "save_kitchen_load": save_kitchen_load,
+            "load_kitchen_load": load_kitchen_load,
+            "MENU": MENU,
+            "ALL_ITEMS": ALL_ITEMS,
+            "STOP_POINTS": STOP_POINTS,
+            "MANAGERS": MANAGERS,
+            "kb_main": kb_main,
+            "DELIVERY_POINT": DELIVERY_POINT,
+        })
+    except Exception as e:
+        print(f"Панель не запустилась: {e}")
 
     threading.Thread(target=payment_watcher, args=(vk,), daemon=True).start()
     threading.Thread(target=refund_watcher, args=(vk,), daemon=True).start()
