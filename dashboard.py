@@ -102,6 +102,7 @@ def _orders_payload(scope_point):
             "paid_online": "Оплачено онлайн" in pay,
             "phone": info.get("phone") or "",
             "address": info.get("address") or "",
+            "zone": info.get("zone") or "",
             "comment": info.get("comment") or "",
             "details": info.get("manager_notification") or "",
             "created": info.get("created_at") or 0,
@@ -114,18 +115,28 @@ def _orders_payload(scope_point):
 def _stop_payload(scope_point):
     stop_list = CTX["stop_list"]
     all_items = CTX["ALL_ITEMS"]
-    points = list(CTX["STOP_POINTS"])
-    default_point = scope_point if scope_point in points else points[0]
+    all_points = list(CTX["STOP_POINTS"])
+    if scope_point == "all":
+        points = all_points
+    elif scope_point in all_points:
+        points = [scope_point]          # кассир видит и меняет только свою точку
+    else:
+        points = []                      # курьеру стоп-лист недоступен
+    default_point = points[0] if points else ""
     items = [{"idx": i, "cat": c, "name": n} for i, (c, n) in enumerate(all_items, start=1)]
     stopped_by = {p: list(stop_list.get(p, [])) for p in points}
     return {"points": points, "default_point": default_point, "items": items, "stopped_by": stopped_by}
 
 
-def _clients_payload():
+def _clients_payload(scope_point):
+    if scope_point == "courier":
+        return []                        # курьеру клиентская база не отдаётся
     customers = CTX["customers"]
     out = []
     for uid, c in list(customers.items()):
         last = c.get("last_order") or {}
+        if scope_point != "all" and (last.get("point") or "") != scope_point:
+            continue                     # кассир видит только клиентов своей точки
         items = last.get("items") or []
         d = c.get("delivery") or {}
         addr = ""
@@ -151,9 +162,29 @@ def _state_payload(scope_point):
         "orders": _orders_payload(scope_point),
         "stop": _stop_payload(scope_point),
         "load": CTX["load_kitchen_load"](),
-        "clients": _clients_payload(),
+        "clients": _clients_payload(scope_point),
         "server_time": time.strftime("%H:%M:%S"),
     }
+
+
+def _notify_client_reliable(num, info, text):
+    """Надёжное уведомление клиента: пишем pending и шлём; при сбое VK
+    заказ уже помечен, и фоновая досылка бота (тот же процесс, та же
+    active_orders) отправит его повторно."""
+    active = CTX["active_orders"]
+    info["pending_client_status_notification"] = text
+    info["status_notify_failures"] = 0
+    CTX["save_json"](CTX["ACTIVE_ORDERS_FILE"], active)
+    ok = False
+    try:
+        ok = CTX["send"](CTX["vk"], int(info["user_id"]), text, CTX["kb_main"]())
+    except Exception as e:
+        print(f"[dashboard] уведомление клиента #{num}: {e}")
+    if ok:
+        info.pop("pending_client_status_notification", None)
+        info["last_client_status_notified_at"] = time.time()
+        CTX["save_json"](CTX["ACTIVE_ORDERS_FILE"], active)
+    return ok
 
 
 def _apply_status(num, requested, scope_point):
@@ -162,40 +193,44 @@ def _apply_status(num, requested, scope_point):
     if not info:
         return False, "Заказ не найден или старше 24 часов."
     is_courier = (scope_point == "courier")
+    is_delivery = info.get("order_type") == "delivery"
+    p = _point_of(info)
 
-    # Задержка курьера — статус НЕ меняем, просто уведомляем клиента.
+    # 1) АВТОРИЗАЦИЯ на конкретный заказ — раньше любого действия.
+    if is_courier:
+        if not is_delivery:
+            return False, "Курьер работает только с доставкой."
+    elif scope_point != "all" and p != scope_point:
+        return False, "Этот заказ не на вашей точке."
+
+    current = info.get("status", "Принят")
+
+    # 2) Задержка курьера — разовое уведомление, статус не меняем.
     if requested == "⏱ Задержка +15 мин":
-        if info.get("order_type") != "delivery":
+        if not is_delivery:
             return False, "Задержка только для доставки."
-        if info.get("status") != "🚗 Курьер выехал":
+        if current != "🚗 Курьер выехал":
             return False, "Задержку можно отметить только когда курьер выехал."
+        ok = False
         try:
-            client_id = int(info["user_id"])
-            CTX["send"](CTX["vk"], client_id,
+            ok = CTX["send"](CTX["vk"], int(info["user_id"]),
                 f"⏱ Небольшая задержка по заказу #{num} — курьер будет примерно на 15 минут позже. Спасибо за ожидание! 🙏",
                 CTX["kb_main"]())
         except Exception as e:
             print(f"[dashboard] задержка #{num}: {e}")
         info["delay_notified_at"] = time.time()
-        return True, "Клиенту отправлено уведомление о задержке."
+        return (True, "Клиенту отправлено уведомление о задержке.") if ok \
+            else (False, "VK не принял сообщение, попробуйте ещё раз.")
 
-    p = _point_of(info)
-    if is_courier:
-        # Курьер может только завершить доставку, которую уже везёт.
-        if not (info.get("order_type") == "delivery"
-                and info.get("status") == "🚗 Курьер выехал"
-                and requested == "✅ Доставлен"):
-            return False, "Курьер может отметить только «Доставлен» после выезда."
-    elif scope_point != "all" and p != scope_point:
-        return False, "Этот заказ не на вашей точке."
-    current = info.get("status", "Принят")
+    # 3) Курьер завершает только доставку, которую уже везёт.
+    if is_courier and not (is_delivery and current == "🚗 Курьер выехал" and requested == "✅ Доставлен"):
+        return False, "Курьер может отметить только «Доставлен» после выезда."
+
     if current in FINAL:
         return False, f"Заказ уже завершён: {current}."
-    is_delivery = info.get("order_type") == "delivery"
     flow = FLOW_DELIVERY if is_delivery else FLOW_PICKUP
     if requested not in flow.get(current, []):
         return False, f"Нельзя перейти {current} → {requested}."
-    # Отмену оплаченного онлайн заказа делаем в VK (там возврат ЮKassa).
     if requested == "❌ Отменён" and "Оплачено онлайн" in (info.get("payment_status") or ""):
         return False, "Заказ оплачен онлайн — отмена с возвратом делается в VK-боте."
 
@@ -203,27 +238,31 @@ def _apply_status(num, requested, scope_point):
     info["status_updated_at"] = time.time()
     CTX["save_json"](CTX["ACTIVE_ORDERS_FILE"], active)
 
-    # Уведомляем клиента в VK.
-    try:
-        client_id = int(info["user_id"])
-        txt = CLIENT_TEXT.get(requested, f"Статус заказа #{num}: {requested}").format(n=num)
-        CTX["send"](CTX["vk"], client_id, txt, CTX["kb_main"]())
-    except Exception as e:
-        print(f"[dashboard] не удалось уведомить клиента по #{num}: {e}")
+    # Клиента уведомляем надёжно (с фоновой досылкой при сбое VK).
+    text = CLIENT_TEXT.get(requested, f"Статус заказа #{num}: {requested}").format(n=num)
+    _notify_client_reliable(num, info, text)
     return True, "OK"
 
 
 def _set_stop(view_point, idx):
     if view_point not in CTX["STOP_POINTS"]:
         return False, "Неизвестная точка."
-    res = CTX["toggle_stop"](view_point, int(idx))
+    try:
+        i = int(idx)
+    except (TypeError, ValueError):
+        return False, "Не указан номер позиции."
+    res = CTX["toggle_stop"](view_point, i)
     return (True, res) if res else (False, "Неверный номер позиции.")
 
 
 def _set_load(minutes):
-    if int(minutes) not in (45, 60, 75):
+    try:
+        m = int(minutes)
+    except (TypeError, ValueError):
+        return False, "Не указана загрузка."
+    if m not in (45, 60, 75):
         return False, "Допустимо 45, 60 или 75."
-    CTX["save_kitchen_load"](int(minutes))
+    CTX["save_kitchen_load"](m)
     return True, "OK"
 
 
@@ -255,6 +294,13 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("X-Token", "")
 
     def do_GET(self):
+        try:
+            self._route_get()
+        except Exception as e:
+            print(f"[dashboard] GET {self.path}: {e}")
+            self._json(400, {"error": "bad request"})
+
+    def _route_get(self):
         path = self.path.split("?")[0]
         if path == "/" or path == "/index.html":
             self._send(200, HTML, "text/html; charset=utf-8")
@@ -269,6 +315,13 @@ class Handler(BaseHTTPRequestHandler):
         self._json(404, {"error": "not found"})
 
     def do_POST(self):
+        try:
+            self._route_post()
+        except Exception as e:
+            print(f"[dashboard] POST {self.path}: {e}")
+            self._json(400, {"ok": False, "msg": "Некорректный запрос."})
+
+    def _route_post(self):
         path = self.path.split("?")[0]
         body = self._body_json()
 
@@ -299,6 +352,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200 if ok else 400, {"ok": ok, "msg": msg})
             return
         if path == "/api/load":
+            # Загрузку меняет только владелец или точка доставки (кухня доставки).
+            if point != "all" and point != CTX.get("DELIVERY_POINT"):
+                self._json(403, {"ok": False, "msg": "Загрузку меняет только владелец."})
+                return
             ok, msg = _set_load(body.get("minutes"))
             self._json(200 if ok else 400, {"ok": ok, "msg": msg})
             return
@@ -357,6 +414,7 @@ button:active{transform:translateY(1px)}
 .det{white-space:pre-wrap;font-size:13px;color:#c7cede;background:#12151c;border-radius:10px;
 padding:10px;margin-top:8px;max-height:150px;overflow:auto;display:none}
 .det.on{display:block}
+.mut a{color:#8ab4ff;text-decoration:none} .mut a:active{opacity:.6}
 .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .b-go{background:var(--pri)} .b-ok{background:var(--ok);color:#08210f} .b-warn{background:var(--warn);color:#2a2205}
 .b-neg{background:var(--neg)} .b-gray{background:var(--card2);color:var(--mut)}
@@ -385,7 +443,7 @@ border:1px solid var(--line);padding:10px 16px;border-radius:12px;opacity:0;tran
 <div id="app"></div>
 <div class="toast" id="toast"></div>
 <script>
-const S={token:localStorage.getItem('ete_tok')||'',point:localStorage.getItem('ete_pt')||'',
+const S={openDetails:new Set(),token:localStorage.getItem('ete_tok')||'',point:localStorage.getItem('ete_pt')||'',
 tab:'orders',data:null,seen:new Set(),stopPoint:null,sound:true};
 
 function toast(m){const t=document.getElementById('toast');t.textContent=m;t.classList.add('on');
@@ -414,7 +472,11 @@ async function login(){
  }catch(e){toast('Неверный ПИН');}
 }
 
+function toggleDet(num){ if(S.openDetails.has(num))S.openDetails.delete(num); else S.openDetails.add(num); render(); }
+
 async function setStatus(num,status){
+ if(status.indexOf('Отмен')>=0 && !confirm('Отменить заказ #'+num+'?'))return;
+ if(status.indexOf('Доставлен')>=0 && !confirm('Отметить заказ #'+num+' доставленным?'))return;
  try{const r=await api('/api/status','POST',{num,status});
    toast(r.ok?('Готово: '+status):(r.msg||'Ошибка'));tick();}catch(e){}
 }
@@ -432,7 +494,7 @@ async function tick(){
    const cur=new Set(d.orders.map(o=>o.num));
    if(S.data){d.orders.forEach(o=>{if(!S.seen.has(o.num)){beep();}});}
    S.seen=cur;S.data=d;
-   if(!S.stopPoint)S.stopPoint=d.stop.view_point;
+   if(!S.stopPoint)S.stopPoint=d.stop.default_point;
    render();
  }catch(e){}
 }
@@ -453,13 +515,13 @@ function orderCard(o){
      <span class="badge">${esc(o.point)}</span>${payTag}<span class="sp" style="flex:1"></span>
      <span class="st">${esc(o.status)}</span></div>
    ${(o.time||o.total!=null||o.pay)?`<div class="mut" style="margin-top:6px">${o.time?'🕒 '+esc(o.time):''}${o.total!=null?' · 💰 '+o.total+'₽':''}${o.pay?' · 💳 '+esc(o.pay):''}</div>`:''}
-   ${o.address?`<div class="mut">🏠 ${esc(o.address)}</div>`:''}
-   ${o.phone?`<div class="mut">📱 ${esc(o.phone)}</div>`:''}
+   ${o.address?`<div class="mut">🏠 <a href="https://yandex.ru/maps/?text=${encodeURIComponent([o.zone,o.address].filter(Boolean).join(', '))}" target="_blank" rel="noopener">${esc(o.address)}</a></div>`:''}
+   ${o.phone?`<div class="mut">📱 <a href="tel:${o.phone.replace(/[^0-9+]/g,'')}">${esc(o.phone)}</a></div>`:''}
    ${o.comment?`<div class="mut">💬 ${esc(o.comment)}</div>`:''}
    <div class="acts">${actBtns||'<span class="mut">— завершён —</span>'}
-     <button class="b-gray" onclick="this.parentElement.parentElement.querySelector('.det').classList.toggle('on')">детали</button>
+     <button class="b-gray" onclick="toggleDet('${o.num}')">детали</button>
    </div>
-   <div class="det">${esc(o.details)}</div>
+   <div class="det ${S.openDetails.has(o.num)?'on':''}">${esc(o.details)}</div>
  </div>`;
 }
 
@@ -474,7 +536,7 @@ function view(){
  if(S.tab==='stop'){
    const pts=d.stop.points;const vp=(S.stopPoint&&pts.includes(S.stopPoint))?S.stopPoint:d.stop.default_point;
    const stopped=new Set(d.stop.stopped_by[vp]||[]);
-   const seg=pts.map(p=>`<button class="s ${p===vp?'on':''}" onclick="S.stopPoint='${p}';render()">${esc(p)}</button>`).join('');
+   const seg=pts.length>1?pts.map(p=>`<button class="s ${p===vp?'on':''}" onclick="S.stopPoint='${p}';render()">${esc(p)}</button>`).join(''):'';
    const items=d.stop.items.map(it=>{const isStop=stopped.has(it.name);
      return `<div class="stopitem">
      <div><b>${it.idx}.</b> ${esc(it.name)} <span class="mut">· ${esc(it.cat)}</span></div>
