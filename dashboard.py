@@ -5,11 +5,52 @@
 """
 
 import os
+import re
 import json
 import time
 import secrets
 import threading
+import datetime
+from zoneinfo import ZoneInfo
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+TZ = ZoneInfo("Asia/Yekaterinburg")  # как в боте
+
+
+def _deadline_ts(info):
+    """Момент, к которому заказ должен быть готов/доставлен (unix-секунды).
+    «Побыстрее (~N мин)» = создание + N мин; иначе — ближайшее ЧЧ:ММ из pickup_time."""
+    created = info.get("created_at")
+    pt = info.get("pickup_time") or ""
+    if not created:
+        return None
+    m = re.search(r"~\s*(\d+)\s*мин", pt)
+    if m:
+        return created + int(m.group(1)) * 60
+    hm = re.search(r"(\d{1,2}):(\d{2})", pt)
+    if hm:
+        h, mm = int(hm.group(1)), int(hm.group(2))
+        if not (0 <= h <= 23 and 0 <= mm <= 59):
+            return None
+        base = datetime.datetime.fromtimestamp(created, TZ)
+        target = base.replace(hour=h, minute=mm, second=0, microsecond=0)
+        if "завтра" in pt:
+            target += datetime.timedelta(days=1)
+        elif target < base:
+            target += datetime.timedelta(days=1)
+        return target.timestamp()
+    return None
+
+
+def _split_address(address):
+    """(улица_дом, остаток). В карту уходит только улица+дом."""
+    s = address or ""
+    cut = len(s)
+    for sep in (", кв.", " (домофон"):
+        i = s.find(sep)
+        if i != -1:
+            cut = min(cut, i)
+    return s[:cut].strip(), s[cut:].strip(" ,")
 
 # --- ПИН-коды входа. Смени на свои. Значение — какая точка видна кассиру. ---
 # "all" — видит все точки (владелец/управляющий).
@@ -102,7 +143,10 @@ def _orders_payload(scope_point):
             "paid_online": "Оплачено онлайн" in pay,
             "phone": info.get("phone") or "",
             "address": info.get("address") or "",
+            "addr_link": _split_address(info.get("address"))[0],
+            "addr_rest": _split_address(info.get("address"))[1],
             "zone": info.get("zone") or "",
+            "deadline_ts": _deadline_ts(info),
             "comment": info.get("comment") or "",
             "details": info.get("manager_notification") or "",
             "created": info.get("created_at") or 0,
@@ -415,6 +459,10 @@ button:active{transform:translateY(1px)}
 padding:10px;margin-top:8px;max-height:150px;overflow:auto;display:none}
 .det.on{display:block}
 .mut a{color:#8ab4ff;text-decoration:none} .mut a:active{opacity:.6}
+.timerline{margin-top:8px}
+.timer{display:inline-block;font-weight:700;font-size:15px;padding:4px 10px;border-radius:8px;background:#16301f;color:#9cf0bd}
+.timer.late{background:#3b1a1a;color:#ff9c9c}
+.timer.soon{background:#3a3410;color:#ffe08a}
 .acts{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
 .b-go{background:var(--pri)} .b-ok{background:var(--ok);color:#08210f} .b-warn{background:var(--warn);color:#2a2205}
 .b-neg{background:var(--neg)} .b-gray{background:var(--card2);color:var(--mut)}
@@ -515,8 +563,9 @@ function orderCard(o){
      <span class="badge">${esc(o.point)}</span>${payTag}<span class="sp" style="flex:1"></span>
      <span class="st">${esc(o.status)}</span></div>
    ${(o.time||o.total!=null||o.pay)?`<div class="mut" style="margin-top:6px">${o.time?'🕒 '+esc(o.time):''}${o.total!=null?' · 💰 '+o.total+'₽':''}${o.pay?' · 💳 '+esc(o.pay):''}</div>`:''}
-   ${o.address?`<div class="mut">🏠 <a href="https://yandex.ru/maps/?text=${encodeURIComponent([o.zone,o.address].filter(Boolean).join(', '))}" target="_blank" rel="noopener">${esc(o.address)}</a></div>`:''}
+   ${o.addr_link?`<div class="mut">🏠 <a href="https://yandex.ru/maps/?text=${encodeURIComponent([o.zone,o.addr_link].filter(Boolean).join(', '))}" target="_blank" rel="noopener">${esc(o.addr_link)}</a>${o.addr_rest?' '+esc(o.addr_rest):''}</div>`:''}
    ${o.phone?`<div class="mut">📱 <a href="tel:${o.phone.replace(/[^0-9+]/g,'')}">${esc(o.phone)}</a></div>`:''}
+   ${(!o.final&&o.deadline_ts)?`<div class="timerline"><span class="timer" data-deadline="${o.deadline_ts}"></span></div>`:''}
    ${o.comment?`<div class="mut">💬 ${esc(o.comment)}</div>`:''}
    <div class="acts">${actBtns||'<span class="mut">— завершён —</span>'}
      <button class="b-gray" onclick="toggleDet('${o.num}')">детали</button>
@@ -591,11 +640,32 @@ function render(){
  </header>
  <div class="tabs">${tabs.map(t=>`<button class="tab ${S.tab===t[0]?'on':''}" onclick="S.tab='${t[0]}';render()">${t[1]}${t[0]==='orders'&&d?` (${d.orders.filter(o=>!o.final).length})`:''}</button>`).join('')}</div>
  <div class="wrap">${view()}</div>`;
+ updateTimers();
+}
+
+function fmtLeft(sec){
+ const neg=sec<0; sec=Math.abs(sec);
+ const h=Math.floor(sec/3600), m=Math.floor((sec%3600)/60), s=sec%60;
+ const pad=n=>String(n).padStart(2,'0');
+ const t = h>0 ? (h+':'+pad(m)+':'+pad(s)) : (pad(m)+':'+pad(s));
+ return neg ? ('🔴 опоздание +'+t) : ('⏳ осталось '+t);
+}
+function updateTimers(){
+ const now=Date.now()/1000;
+ document.querySelectorAll('.timer[data-deadline]').forEach(el=>{
+   const dl=parseInt(el.dataset.deadline||'0',10);
+   if(!dl){el.textContent='';return;}
+   const left=Math.round(dl-now);
+   el.textContent=fmtLeft(left);
+   el.classList.toggle('late', left<0);
+   el.classList.toggle('soon', left>=0 && left<300);
+ });
 }
 
 render();
 if(S.token)tick();
 setInterval(tick,4000);
+setInterval(updateTimers,1000);
 </script>
 </body>
 </html>"""
