@@ -1973,6 +1973,8 @@ def kb_choose_payment(order):
         kb.add_button("💵 Наличными", color=VkKeyboardColor.SECONDARY)
     else:
         kb.add_button("💵 Оплата при получении", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("◀️ В корзину", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -3975,6 +3977,11 @@ def main():
         # ВЫБОР ОПЛАТЫ
         if step == "choose_payment":
             order = state["order"]
+            if text == "◀️ В корзину":
+                state["step"] = "cart_edit"
+                state["cart_page"] = 0
+                send(vk, user_id, "🛒 Твой заказ:\n\n" + format_cart(order), cart_keyboard_for_state(state))
+                continue
             if not ensure_order_available(vk, user_id, state):
                 continue
             if not ensure_order_time_current(vk, user_id, state):
