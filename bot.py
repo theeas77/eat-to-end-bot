@@ -2204,18 +2204,7 @@ def start_checkout(vk, user_id, state):
             send(vk, user_id, "🚗 Уточним адрес доставки. Выбери зону 👇", kb_delivery_zones())
         return
 
-    # Ненавязчивый upsell: сначала одна популярная добавка, затем напиток.
-    if not state.get("upsell_extras_shown"):
-        state["upsell_extras_shown"] = True
-        stopped_now = stopped_for_order(order)
-        popular_available = [e for e in ("Сыр тертый", "Бекон") if e not in stopped_now]
-        target_idx = next((idx for idx, i in enumerate(order["items"]) if i.get("cat") in EXTRAS_CATS and not i.get("extras")), None)
-        if target_idx is not None and popular_available:
-            state["upsell_target_idx"] = target_idx
-            state["step"] = "upsell_extra"
-            send(vk, user_id, "🔥 Сделать ещё вкуснее? Добавь популярную добавку одним нажатием.", kb_upsell_extra(stopped_now))
-            return
-
+    # Ненавязчивый upsell: предлагаем только напиток (морс).
     if not state.get("upsell_drink_shown") and not any(i.get("cat") == "Напитки" for i in order["items"]):
         state["upsell_drink_shown"] = True
         available_stopped = stopped_for_order(order)
