@@ -306,7 +306,7 @@ def save_customer(user_id, order):
         c["phone"] = order["phone"]
     if order.get("delivery"):
         d = order["delivery"]
-        c["delivery"] = {k: d.get(k) for k in ("zone", "price", "street", "house", "apt", "domofon")}
+        c["delivery"] = {k: d.get(k) for k in ("zone", "price", "street", "house", "apt", "entrance", "floor", "domofon")}
     # Сохраняем только то, что нужно для повторного заказа
     c["last_order"] = {
         "items": [{**i, "qty": i.get("qty", 1)} for i in order.get("items", [])],
@@ -325,7 +325,7 @@ def save_delivery_address(user_id, delivery):
     if not delivery.get("street") or not delivery.get("house") or not delivery.get("zone"):
         return
     c = get_customer(user_id)
-    c["delivery"] = {k: delivery.get(k) for k in ("zone", "price", "street", "house", "apt", "domofon")}
+    c["delivery"] = {k: delivery.get(k) for k in ("zone", "price", "street", "house", "apt", "entrance", "floor", "domofon")}
     _save_json(CUSTOMERS_FILE, customers)
 
 
@@ -374,6 +374,10 @@ def save_active_order(order_num, user_id, order, manager_id, total=None, payment
         addr = f"{d.get('street', '')}, д. {d.get('house', '')}"
         if d.get("apt"):
             addr += f", кв. {d['apt']}"
+        if d.get("entrance"):
+            addr += f", подъезд {d['entrance']}"
+        if d.get("floor"):
+            addr += f", этаж {d['floor']}"
         if d.get("domofon"):
             addr += f" (домофон {d['domofon']})"
         entry["address"] = addr
@@ -1461,6 +1465,14 @@ def kb_apt_skip():
     return kb.get_keyboard()
 
 
+def kb_skip():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("Пропустить", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
+    return kb.get_keyboard()
+
+
 def kb_domofon():
     kb = VkKeyboard(one_time=True)
     kb.add_button("✅ Есть домофон", color=VkKeyboardColor.SECONDARY)
@@ -2274,6 +2286,10 @@ def _finalize_order(vk, user_id, user_name, first_name, order, order_num, cart, 
         addr = f"{d['street']}, д. {d['house']}"
         if d.get("apt"):
             addr += f", кв. {d['apt']}"
+        if d.get("entrance"):
+            addr += f", подъезд {d['entrance']}"
+        if d.get("floor"):
+            addr += f", этаж {d['floor']}"
         notif = (
             f"🚗 НОВЫЙ ЗАКАЗ #{order_num} — ДОСТАВКА\n\n"
             f"👤 {user_name} (vk.com/id{user_id})\n"
@@ -2378,6 +2394,8 @@ def _abandoned_keyboard(state):
         return kb_delivery_zones()
     if step == "delivery_apt":
         return kb_apt_skip()
+    if step in ("delivery_entrance", "delivery_floor"):
+        return kb_skip()
     if step == "delivery_domofon":
         return kb_domofon()
     if step in ("confirm_saved_address", "repeat_confirm_address"):
@@ -3407,8 +3425,22 @@ def main():
                     kb_categories_for_order(state["order"]))
             else:
                 state["order"]["delivery"]["apt"] = text.strip()
-                state["step"] = "delivery_domofon"
-                send(vk, user_id, "🔔 Есть ли домофон?", kb_domofon())
+                state["step"] = "delivery_entrance"
+                send(vk, user_id, "🚪 Номер подъезда?\n\nНапиши номер или нажми «Пропустить»:", kb_skip())
+            continue
+
+        # ДОСТАВКА: подъезд
+        if step == "delivery_entrance":
+            state["order"]["delivery"]["entrance"] = None if text == "Пропустить" else text.strip()
+            state["step"] = "delivery_floor"
+            send(vk, user_id, "🏢 Этаж?\n\nНапиши этаж или нажми «Пропустить»:", kb_skip())
+            continue
+
+        # ДОСТАВКА: этаж
+        if step == "delivery_floor":
+            state["order"]["delivery"]["floor"] = None if text == "Пропустить" else text.strip()
+            state["step"] = "delivery_domofon"
+            send(vk, user_id, "🔔 Есть ли домофон?", kb_domofon())
             continue
 
         # ДОСТАВКА: домофон
@@ -3424,6 +3456,10 @@ def main():
             d = state["order"]["delivery"]
             save_delivery_address(user_id, d)
             addr = f"{d['street']}, д. {d['house']}, кв. {d['apt']}"
+            if d.get("entrance"):
+                addr += f", подъезд {d['entrance']}"
+            if d.get("floor"):
+                addr += f", этаж {d['floor']}"
             send(vk, user_id,
                 f"✅ Адрес: {addr}\n"
                 f"🔔 Домофон: {d['domofon']}\n"
@@ -3900,6 +3936,10 @@ def main():
             phone = order.get("phone", "")
             d = order["delivery"]
             addr = f"{d['street']}, д. {d['house']}" + (f", кв. {d['apt']}" if d.get('apt') else "")
+            if d.get("entrance"):
+                addr += f", подъезд {d['entrance']}"
+            if d.get("floor"):
+                addr += f", этаж {d['floor']}"
             cart = format_cart(order)
             comment_line = f"💬 Комментарий: {order['comment']}\n" if order.get("comment") else ""
             summary = (
