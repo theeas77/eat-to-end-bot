@@ -491,6 +491,7 @@ border:1px solid var(--line);padding:10px 16px;border-radius:12px;opacity:0;tran
 <div id="app"></div>
 <div class="toast" id="toast"></div>
 <script>
+const CITY_HINT="Чайковский";
 const S={openDetails:new Set(),token:localStorage.getItem('ete_tok')||'',point:localStorage.getItem('ete_pt')||'',
 tab:'orders',data:null,seen:new Set(),stopPoint:null,sound:true};
 
@@ -563,7 +564,7 @@ function orderCard(o){
      <span class="badge">${esc(o.point)}</span>${payTag}<span class="sp" style="flex:1"></span>
      <span class="st">${esc(o.status)}</span></div>
    ${(o.time||o.total!=null||o.pay)?`<div class="mut" style="margin-top:6px">${o.time?'🕒 '+esc(o.time):''}${o.total!=null?' · 💰 '+o.total+'₽':''}${o.pay?' · 💳 '+esc(o.pay):''}</div>`:''}
-   ${o.addr_link?`<div class="mut">🏠 <a href="https://yandex.ru/maps/?text=${encodeURIComponent([o.zone,o.addr_link].filter(Boolean).join(', '))}" target="_blank" rel="noopener">${esc(o.addr_link)}</a>${o.addr_rest?' '+esc(o.addr_rest):''}</div>`:''}
+   ${o.addr_link?`<div class="mut">🏠 <a href="https://yandex.ru/maps/?text=${encodeURIComponent([CITY_HINT,o.addr_link].filter(Boolean).join(', '))}" target="_blank" rel="noopener">${esc(o.addr_link)}</a>${o.addr_rest?' '+esc(o.addr_rest):''}</div>`:''}
    ${o.phone?`<div class="mut">📱 <a href="tel:${o.phone.replace(/[^0-9+]/g,'')}">${esc(o.phone)}</a></div>`:''}
    ${(!o.final&&o.deadline_ts)?`<div class="timerline"><span class="timer" data-deadline="${o.deadline_ts}"></span></div>`:''}
    ${o.comment?`<div class="mut">💬 ${esc(o.comment)}</div>`:''}
