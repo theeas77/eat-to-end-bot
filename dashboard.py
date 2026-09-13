@@ -46,7 +46,7 @@ def _split_address(address):
     """(улица_дом, остаток). В карту уходит только улица+дом."""
     s = address or ""
     cut = len(s)
-    for sep in (", кв.", " (домофон"):
+    for sep in (", кв.", ", подъезд", ", этаж", " (домофон"):
         i = s.find(sep)
         if i != -1:
             cut = min(cut, i)
