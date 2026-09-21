@@ -67,7 +67,9 @@ DELIVERY_TEST_USER = 72534661      # VK ID для теста доставки (i
 DELIVERY_POINT = "Ленина 36/2"     # с какой точки готовят доставку
 DELIVERY_MIN_ORDER = 500           # минимальная сумма заказа на доставку (только товары), ₽
 DELIVERY_OPEN_H = 12               # доставка работает с 12:00
-DELIVERY_CLOSE_H = 25              # до 01:00 следующего дня (24 + 1)
+DELIVERY_CLOSE_H = 25              # приём заказов на доставку до 01:00 (24 + 1)
+DELIVERY_ASAP_LAST_H = 26         # «Побыстрее», выбранное до 01:00, можно довезти до 02:00 (24 + 2)
+PREOPEN_WINDOW_MIN = 120          # за сколько минут до открытия предлагать оформление «к открытию»
 DELIVERY_ZONES = {
     "Чайковский": 200,
     "Новый": 350,
@@ -82,10 +84,11 @@ DELIVERY_ASAP_NORMAL = 45   # минут в обычное время
 DELIVERY_ASAP_PEAK = 60     # минут в часы пик
 
 
-def get_asap_minutes():
+def get_asap_minutes(now=None):
     """Оценка «Побыстрее»: максимум из ручной загрузки кухни и авто-часов-пик.
+    now позволяет считать оценку на нужный момент (например на время открытия).
     Возвращает (минут, подпись_о_загрузке)."""
-    h = datetime.datetime.now(TZ).hour
+    h = (now or datetime.datetime.now(TZ)).hour
     auto = DELIVERY_ASAP_NORMAL
     for start_h, end_h in DELIVERY_PEAK_HOURS:
         if start_h <= h < end_h:
@@ -1185,13 +1188,15 @@ def order_time_issue(order, now=None, reference_ts=None):
     """
     now = now or datetime.datetime.now(TZ)
     if order.get("order_type") == "delivery" and order.get("delivery_asap"):
-        hh = now.hour + now.minute / 60
-        if DELIVERY_CLOSE_H <= 24:
-            open_now = DELIVERY_OPEN_H <= hh <= DELIVERY_CLOSE_H
-        else:
-            open_now = hh >= DELIVERY_OPEN_H or hh <= (DELIVERY_CLOSE_H - 24)
-        if not open_now:
-            return "приём заказов на доставку уже завершён (после 01:00)"
+        # Считаем расчётное время доставки (сейчас + оценка) и проверяем, что оно
+        # попадает в рабочее окно 12:00–02:00. Так «Побыстрее» в 11:45 (→12:30)
+        # проходит, а заведомо нерабочее время — нет.
+        asap_min, _ = get_asap_minutes(now)
+        eta = now + datetime.timedelta(minutes=asap_min)
+        hh = eta.hour + eta.minute / 60
+        eta_ok = hh >= DELIVERY_OPEN_H or hh <= (DELIVERY_ASAP_LAST_H - 24)
+        if not eta_ok:
+            return "сейчас доставка «Побыстрее» недоступна"
         return None
     scheduled = order_scheduled_datetime(order, reference_ts=reference_ts)
     if scheduled is None:
@@ -1489,6 +1494,16 @@ def kb_change():
     kb.add_line()
     kb.add_button("2000₽", color=VkKeyboardColor.SECONDARY)
     kb.add_button("Без сдачи", color=VkKeyboardColor.POSITIVE)
+    return kb.get_keyboard()
+
+
+def kb_delivery_preopen():
+    kb = VkKeyboard(one_time=True)
+    kb.add_button("⚡ К открытию", color=VkKeyboardColor.POSITIVE)
+    kb.add_line()
+    kb.add_button("🕒 Другое время", color=VkKeyboardColor.SECONDARY)
+    kb.add_line()
+    kb.add_button("🏠 В начало", color=VkKeyboardColor.NEGATIVE)
     return kb.get_keyboard()
 
 
@@ -2226,11 +2241,16 @@ def start_checkout(vk, user_id, state):
                 f"Сейчас на {goods}₽, добавь ещё на {need}₽ 😊",
                 kb_categories_for_order(state["order"]))
             return
-        # Доставка открыта — доступны «Побыстрее» и «К определённому времени».
-        # Доставка закрыта — оформляем предзаказ только на рабочее окно 12:00–01:00.
-        if is_delivery_open():
+        # «Побыстрее» доступно, когда доставка открыта ИЛИ вот-вот откроется и
+        # заказ поспеет уже после открытия: напр. в 11:45 (+45 мин) → к 12:30,
+        # в 11:20 → к 12:05. Если готовность попадала бы до открытия — предзаказ.
+        now = datetime.datetime.now(TZ)
+        asap_min, load_note = get_asap_minutes()
+        opening = next_delivery_open_datetime(now)
+        eta_asap = now + datetime.timedelta(minutes=asap_min)
+        asap_available = is_delivery_open() or eta_asap >= opening
+        if asap_available:
             state["order"]["is_preorder"] = False
-            asap_min, load_note = get_asap_minutes()
             state["step"] = "delivery_time_mode"
             send(vk, user_id,
                 "🕒 Когда доставить?\n\n"
@@ -2240,8 +2260,7 @@ def start_checkout(vk, user_id, state):
                 kb_delivery_time())
         else:
             state["order"]["is_preorder"] = True
-            # Фиксируем конкретную смену предзаказа: прошедшее время не переносим молча на завтра.
-            state["order"]["preorder_service_date"] = datetime.datetime.now(TZ).date().isoformat()
+            state["order"]["preorder_service_date"] = now.date().isoformat()
             state["step"] = "delivery_time_custom"
             send(vk, user_id,
                 "🌙 Сейчас доставка не работает (она с 12:00 до 01:00),\n"
@@ -2412,6 +2431,8 @@ def _abandoned_keyboard(state):
         return kb_sauces(stopped_for_order(order))
     if step == "choose_extras_for_item":
         return kb_extras_page2(stopped_for_order(order)) if state.get("extras_page", 1) == 2 else kb_extras_page1(stopped_for_order(order))
+    if step == "delivery_preopen":
+        return kb_delivery_preopen()
     if step == "delivery_time_mode":
         return kb_delivery_time()
     if step == "choose_time":
@@ -3662,6 +3683,34 @@ def main():
 
         if step == "choose_category" and text == "🛒 Оформить заказ":
             start_checkout(vk, user_id, state)
+            continue
+
+        # ДОСТАВКА: оформление к ближайшему открытию
+        if step == "delivery_preopen":
+            if text.startswith("⚡ К открытию"):
+                eta = _parse_iso_datetime(state["order"].get("preopen_eta"))
+                if eta:
+                    state["order"]["is_preorder"] = True
+                    state["order"]["delivery_asap"] = False
+                    state["order"]["pickup_at"] = eta.isoformat()
+                    state["order"]["pickup_time"] = f"{eta.strftime('%H:%M')} (к открытию)"
+                    request_phone(vk, user_id, state)
+                    continue
+                # запасной путь
+                state["order"]["is_preorder"] = True
+                state["order"]["preorder_service_date"] = datetime.datetime.now(TZ).date().isoformat()
+                state["step"] = "delivery_time_custom"
+                send(vk, user_id, "🕒 Напиши время доставки в формате ЧЧ:ММ (с 12:00 до 01:00):", None)
+                continue
+            if text == "🕒 Другое время":
+                state["order"]["is_preorder"] = True
+                state["order"]["preorder_service_date"] = datetime.datetime.now(TZ).date().isoformat()
+                state["step"] = "delivery_time_custom"
+                send(vk, user_id,
+                    "🕒 Напиши время доставки в формате ЧЧ:ММ.\nДоступное время: с 12:00 до 01:00",
+                    None)
+                continue
+            send(vk, user_id, "Выбери вариант 👇", kb_delivery_preopen())
             continue
 
         # ДОСТАВКА: режим времени
